@@ -1,18 +1,21 @@
 // lib/auth.ts
 import NextAuth from "next-auth";
+import type { NextAuthConfig, User, Session } from "next-auth";
+import type { JWT } from "next-auth/jwt";
+import type { AdapterUser } from "@auth/core/adapters";
 import Credentials from "next-auth/providers/credentials";
 import { PrismaAdapter } from "@auth/prisma-adapter";
 import { prisma } from "./db";
 import bcrypt from "bcryptjs";
 
-// Keep auth on Node runtime so bcrypt/Prisma are happy
+// Ensure Node runtime (Prisma + bcrypt don't work on Edge)
 export const runtime = "nodejs";
 
 type Role = "ADMIN" | "LEADER" | "USER";
 
-const config = {
+const config: NextAuthConfig = {
   adapter: PrismaAdapter(prisma),
-  session: { strategy: "jwt" as const },
+  session: { strategy: "jwt" },
 
   providers: [
     Credentials({
@@ -35,62 +38,63 @@ const config = {
         const ok = await bcrypt.compare(password, user.password);
         if (!ok) return null;
 
+        // Return a shape that includes role; NextAuth will merge onto JWT
         return {
           id: user.id,
           email: user.email,
           name: user.name ?? null,
           role: (user.role ?? "USER") as Role,
-        } as unknown as Record<string, unknown>;
+        } as unknown as User; // minimal cast so callbacks get `user.role`
       },
     }),
   ],
 
   callbacks: {
-    // Type the destructured params explicitly to avoid implicit any
-    async jwt(
-      {
-        token,
-        user,
-      }: {
-        token: Record<string, unknown>;
-        user?: Record<string, unknown> | null;
-      }
-    ) {
+    // Params typed for NextAuth v5
+    async jwt({
+      token,
+      user,
+    }: {
+      token: JWT;
+      user?: AdapterUser | User | null;
+    }): Promise<JWT> {
+      // On sign-in, propagate role from `user` to the token
       if (user) {
-        token["role"] = (user["role"] as Role | undefined) ?? "USER";
+        (token as Record<string, unknown>)["role"] =
+          ((user as unknown as Record<string, unknown>)["role"] as Role | undefined) ?? "USER";
       }
       return token;
     },
 
-    async session(
-      {
-        session,
-        token,
-      }: {
-        session: { user?: Record<string, unknown> | null };
-        token: Record<string, unknown>;
-      }
-    ) {
+    async session({
+      session,
+      token,
+      user, // not used for JWT sessions, but part of the signature
+    }: {
+      session: Session;
+      token: JWT;
+      user: AdapterUser | User | undefined;
+      newSession?: unknown;
+      trigger?: "update";
+    }): Promise<Session> {
       if (session.user) {
-        session.user["role"] = (token["role"] as Role | undefined) ?? "USER";
+        (session.user as Record<string, unknown>)["role"] =
+          ((token as unknown as Record<string, unknown>)["role"] as Role | undefined) ?? "USER";
       }
       return session;
     },
 
-    async redirect(
-      {
-        url,
-        baseUrl,
-      }: {
-        url: string;
-        baseUrl: string;
-      }
-    ) {
+    async redirect({
+      url,
+      baseUrl,
+    }: {
+      url: string;
+      baseUrl: string;
+    }): Promise<string> {
       try {
         const u = new URL(url);
         const b = new URL(baseUrl);
-        if (u.origin === b.origin) return url;
-        return baseUrl;
+        return u.origin === b.origin ? url : baseUrl;
       } catch {
         return baseUrl;
       }
