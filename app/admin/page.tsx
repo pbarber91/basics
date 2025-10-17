@@ -1,4 +1,7 @@
 // app/admin/page.tsx
+export const runtime = "nodejs";
+
+import type { ReactNode } from "react";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { redirect } from "next/navigation";
@@ -14,6 +17,16 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 
+// Type for each row returned by the users query below
+type UserRow = {
+  id: string;
+  name: string | null;
+  email: string;
+  role: string;
+  createdAt: Date;
+  _count: { progresses: number };
+};
+
 export default async function AdminPage({
   searchParams,
 }: {
@@ -25,14 +38,14 @@ export default async function AdminPage({
   const myEmail = session?.user?.email ?? null;
   if (myRole !== "ADMIN") redirect("/signin");
 
-  // --- Read search params safely ---
+  // --- Read search params safely (Next 15) ---
   const sp = await searchParams;
   const q = (typeof sp.q === "string" ? sp.q : "").trim();
   const pageStr = typeof sp.page === "string" ? sp.page : "1";
   const page = Math.max(parseInt(pageStr, 10) || 1, 1);
   const pageSize = 10;
 
-  // SQLite doesn't support `mode: "insensitive"` — remove it.
+  // SQLite doesn't support `mode: "insensitive"`
   const where =
     q.length > 0
       ? {
@@ -59,7 +72,7 @@ export default async function AdminPage({
         createdAt: true,
         _count: { select: { progresses: true } },
       },
-    }),
+    }) as Promise<UserRow[]>,
     prisma.user.count({ where: { role: "ADMIN" } }),
     myEmail
       ? prisma.user.findUnique({
@@ -171,7 +184,7 @@ export default async function AdminPage({
           <div>
             <h1 className="text-2xl font-bold">Admin Console</h1>
             <p className="text-muted-foreground">
-              Manage users, roles, and track progress across the Basics program.
+              Manage users, roles, and track progress across courses.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -221,7 +234,7 @@ export default async function AdminPage({
         </CardHeader>
 
         <CardContent className="space-y-4">
-          {/* NEW: Add User */}
+          {/* Add User */}
           <div className="rounded-xl border border-border bg-background p-4">
             <h3 className="mb-3 font-semibold">Add User</h3>
             <form action={createUserAction} className="grid gap-3 sm:grid-cols-5">
@@ -281,7 +294,7 @@ export default async function AdminPage({
                 </tr>
               </thead>
               <tbody>
-                {users.map((u) => {
+                {users.map((u: UserRow) => {
                   const isMe = u.email === me?.email;
                   const disableDemote = (u.role === "ADMIN" && adminCount <= 1) || isMe;
                   const disableDelete = disableDemote;
@@ -387,11 +400,11 @@ function Metric({ label, value }: { label: string; value: string | number }) {
   );
 }
 
-function Th({ children, className }: { children: React.ReactNode; className?: string }) {
+function Th({ children, className }: { children: ReactNode; className?: string }) {
   return <th className={clsx("px-3 py-2", className)}>{children}</th>;
 }
 
-function Td({ children, className }: { children: React.ReactNode; className?: string }) {
+function Td({ children, className }: { children: ReactNode; className?: string }) {
   return <td className={clsx("px-3 py-2 align-middle", className)}>{children}</td>;
 }
 
