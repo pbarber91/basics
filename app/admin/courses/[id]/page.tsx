@@ -366,7 +366,7 @@ export default async function AdminCourseDetailPage({
                 </tr>
               </thead>
               <tbody>
-                {course.sessions.map((s) => (
+                {course.sessions.map((s: typeof course.sessions[number]) => (
                   <tr key={s.id} className="border-b border-border last:border-0">
                     <Td colSpan={5} className="p-0">
                       <form action={updateSession} className="grid gap-3 p-3 sm:grid-cols-6">
