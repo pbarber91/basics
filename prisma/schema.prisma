@@ -1,0 +1,157 @@
+// prisma/schema.prisma
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+/**
+ * ----------------- Auth / Users -----------------
+ */
+model User {
+  id        String   @id @default(cuid())
+  name      String?
+  email     String   @unique
+  password  String
+  role      String   @default("USER") // USER | LEADER | ADMIN (kept as String for SQLite)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  accounts Account[]
+  sessions Session[]
+
+  enrollments Enrollment[]
+  progresses  Progress[]
+}
+
+model Account {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  type              String
+  provider          String
+  providerAccountId String
+
+  refresh_token String?
+  access_token  String?
+  expires_at    Int?
+  token_type    String?
+  scope         String?
+  id_token      String?
+  session_state String?
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  expires      DateTime
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+/**
+ * ----------------- Courses -----------------
+ */
+model Course {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  title       String
+  summary     String
+  thumbnail   String?
+  isPublished Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  sessions       CourseSession[]
+  enrollments    Enrollment[]
+  accessRequests AccessRequest[]
+
+  @@index([slug])
+}
+
+model CourseSession {
+  id       String @id @default(cuid())
+  courseId String
+  course   Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  index          Int // 1..N order within the course
+  title          String
+  summary        String
+  videoUrl       String
+  captionsVttUrl String?
+  transcript     String?
+  guideOnlineUrl String
+  guidePdfUrl    String
+  thumbnail      String?
+
+  resources  Resource[]
+  progresses Progress[]
+
+  @@unique([courseId, index]) // allows upsert via where: { courseId_index: { ... } }
+}
+
+model Resource {
+  id         String        @id @default(cuid())
+  sessionId  String
+  session    CourseSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  label      String
+  href       String
+  restricted String? // "LEADER" | "ADMIN" if used
+}
+
+model Enrollment {
+  id        String   @id @default(cuid())
+  userId    String
+  courseId  String
+  status    String   @default("ACTIVE") // ACTIVE | COMPLETED | DROPPED
+  createdAt DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, courseId])
+}
+
+/**
+ * ----------------- Progress (per CourseSession) -----------------
+ */
+model Progress {
+  id          String   @id @default(cuid())
+  userId      String
+  sessionId   String
+  completedAt DateTime @default(now())
+
+  user    User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  session CourseSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, sessionId])
+}
+
+model AccessRequest {
+  id       String @id @default(cuid())
+  courseId String
+  course   Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  name      String
+  email     String
+  message   String?
+  status    String   @default("PENDING") // PENDING | APPROVED | REJECTED (use strings)
+  createdAt DateTime @default(now())
+
+  @@index([courseId])
+}
