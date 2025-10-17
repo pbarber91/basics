@@ -6,10 +6,25 @@ import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
+type Role = "ADMIN" | "LEADER" | "USER";
+
+type CourseCard = {
+  id: string;
+  slug: string;
+  title: string;
+  summary: string | null;
+  thumbnail: string | null;
+  isPublished: boolean;
+};
+
 export default async function CoursesIndexPage() {
   const session = await auth();
   if (!session?.user?.email) redirect("/signin");
-  const role = (session.user as any).role ?? "USER";
+
+  // Read role without `any`
+  const rawRole = (session.user as Record<string, unknown>)["role"];
+  const role: Role =
+    rawRole === "ADMIN" || rawRole === "LEADER" ? (rawRole as Role) : "USER";
 
   const me = await prisma.user.findUnique({
     where: { email: session.user.email },
@@ -17,25 +32,39 @@ export default async function CoursesIndexPage() {
   });
   if (!me) redirect("/signin");
 
-  let courses;
+  let courses: CourseCard[] = [];
 
   if (role === "ADMIN" || role === "LEADER") {
-    // Staff can see ALL courses (published + drafts if you want)
+    // Staff can see ALL courses
     courses = await prisma.course.findMany({
       orderBy: { createdAt: "desc" },
-      select: { id: true, slug: true, title: true, summary: true, thumbnail: true, isPublished: true },
+      select: {
+        id: true,
+        slug: true,
+        title: true,
+        summary: true,
+        thumbnail: true,
+        isPublished: true,
+      },
     });
   } else {
-    // Users see only courses they are ENROLLED in (and usually only published ones)
+    // Users see only courses they are ENROLLED in (published)
     const enrollments = await prisma.enrollment.findMany({
       where: { userId: me.id, status: "ACTIVE" },
       select: { courseId: true },
     });
-    const ids = enrollments.map((e) => e.courseId);
+    const ids = enrollments.map((e: { courseId: string }) => e.courseId);
     courses = await prisma.course.findMany({
       where: { id: { in: ids }, isPublished: true },
       orderBy: { createdAt: "desc" },
-      select: { id: true, slug: true, title: true, summary: true, thumbnail: true, isPublished: true },
+      select: {
+        id: true,
+        slug: true,
+        title: true,
+        summary: true,
+        thumbnail: true,
+        isPublished: true,
+      },
     });
   }
 
@@ -46,22 +75,30 @@ export default async function CoursesIndexPage() {
           <CardTitle>Courses</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {courses.map((c) => (
-            <article key={c.id} className="overflow-hidden rounded-xl border border-border bg-background">
+          {courses.map((c: CourseCard) => (
+            <article
+              key={c.id}
+              className="overflow-hidden rounded-xl border border-border bg-background"
+            >
               {c.thumbnail ? (
+                // eslint-disable-next-line @next/next/no-img-element
                 <img src={c.thumbnail} alt="" className="h-40 w-full object-cover" />
               ) : (
                 <div className="h-40 w-full bg-muted" />
               )}
               <div className="p-4">
                 <h3 className="text-lg font-semibold">{c.title}</h3>
-                <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{c.summary}</p>
+                <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
+                  {c.summary}
+                </p>
                 <div className="mt-3 flex items-center justify-between">
                   <Link href={`/courses/${c.slug}`}>
                     <Button size="sm">View course</Button>
                   </Link>
                   {(role === "ADMIN" || role === "LEADER") && !c.isPublished ? (
-                    <span className="rounded bg-amber-500/15 px-2 py-0.5 text-xs text-amber-400">Draft</span>
+                    <span className="rounded bg-amber-500/15 px-2 py-0.5 text-xs text-amber-400">
+                      Draft
+                    </span>
                   ) : null}
                 </div>
               </div>
