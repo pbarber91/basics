@@ -12,13 +12,11 @@ import { redirect } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea"; // if you don't have this, replace with <textarea>
 import clsx from "clsx";
 
-// Fallback if you don't have shadcn Textarea:
-const FallbackTextarea =
-  (Textarea as any) ??
-  ((props: React.ComponentPropsWithoutRef<"textarea">) => (
+// Simple styled textarea (no external import)
+function TextArea(props: React.ComponentPropsWithoutRef("textarea")) {
+  return (
     <textarea
       {...props}
       className={clsx(
@@ -26,7 +24,8 @@ const FallbackTextarea =
         props.className
       )}
     />
-  ));
+  );
+}
 
 // ---------- Types ----------
 type CourseCard = {
@@ -47,8 +46,7 @@ async function requestAccess(formData: FormData) {
   "use server";
 
   const session = await auth();
-  // Both guests and signed-in users can request access.
-  // If signed in, we trust their user info unless they typed something.
+
   const courseId = String(formData.get("courseId") || "");
   const nameRaw = String(formData.get("name") || "").trim();
   const emailRaw = String(formData.get("email") || "").trim().toLowerCase();
@@ -56,16 +54,13 @@ async function requestAccess(formData: FormData) {
 
   if (!courseId) return;
 
-  // Fall back to session if fields are empty
   const name = nameRaw || (session?.user?.name ?? "");
   const email = emailRaw || (session?.user?.email ?? "");
 
   if (!email) {
-    // Require an email, otherwise we can't follow up
     redirect("/signin?callbackUrl=/catalog");
   }
 
-  // Ensure course exists
   const course = await prisma.course.findUnique({
     where: { id: courseId, isPublished: true },
     select: { id: true },
@@ -82,7 +77,6 @@ async function requestAccess(formData: FormData) {
     },
   });
 
-  // Refresh this page so the UI can show a small success hint if you add one
   revalidatePath("/catalog");
 }
 
@@ -90,7 +84,6 @@ async function requestAccess(formData: FormData) {
 export default async function CatalogPage() {
   const session = await auth();
 
-  // Only show published courses here
   const courses: CourseCard[] = await prisma.course.findMany({
     where: { isPublished: true },
     orderBy: { title: "asc" },
@@ -129,7 +122,6 @@ export default async function CatalogPage() {
                   fill
                   className="object-cover"
                   sizes="(max-width: 768px) 100vw, 33vw"
-                  priority={false}
                 />
               </div>
             ) : (
@@ -148,12 +140,11 @@ export default async function CatalogPage() {
             </CardHeader>
 
             <CardContent className="space-y-4">
-              <p className="text-sm text-muted-foreground min-h-12">
+              <p className="min-h-12 text-sm text-muted-foreground">
                 {c.summary ?? "No description yet."}
               </p>
 
               <div className="flex items-center gap-2">
-                {/* Learn more goes to the course page, but access still requires enrollment */}
                 <Link
                   href={`/courses/${c.slug}`}
                   className="rounded-lg border border-border bg-background px-3 py-2 text-sm hover:bg-muted"
@@ -186,7 +177,7 @@ export default async function CatalogPage() {
                   )}
                   <div className="grid gap-1">
                     <label className="text-xs text-muted-foreground">Message (optional)</label>
-                    <FallbackTextarea
+                    <TextArea
                       name="message"
                       placeholder="Any context you'd like to share…"
                       rows={3}
