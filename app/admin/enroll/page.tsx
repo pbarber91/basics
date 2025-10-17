@@ -123,15 +123,15 @@ export default async function EnrollPage({
       select: { id: true, email: true },
     });
 
-    await Promise.all(
-      found.map((u) =>
-        prisma.enrollment.upsert({
-          where: { userId_courseId: { userId: u.id, courseId } },
-          update: { status: "ACTIVE" },
-          create: { userId: u.id, courseId, status: "ACTIVE" },
-        })
-      )
-    );
+   await Promise.all(
+  found.map((u: typeof found[number]) =>
+    prisma.enrollment.upsert({
+      where: { userId_courseId: { userId: u.id, courseId } },
+      update: { status: "ACTIVE" },
+      create: { userId: u.id, courseId, status: "ACTIVE" },
+    })
+  )
+);
 
     revalidatePath(`/admin/enroll?courseId=${courseId}&q=${encodeURIComponent(q)}`);
   }
