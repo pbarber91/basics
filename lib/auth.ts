@@ -5,7 +5,7 @@ import { PrismaAdapter } from "@auth/prisma-adapter";
 import { prisma } from "./db";
 import bcrypt from "bcryptjs";
 
-// Use Node runtime so bcrypt/Prisma don't hit Edge warnings
+// Keep auth on Node runtime so bcrypt/Prisma are happy
 export const runtime = "nodejs";
 
 type Role = "ADMIN" | "LEADER" | "USER";
@@ -35,7 +35,6 @@ const config = {
         const ok = await bcrypt.compare(password, user.password);
         if (!ok) return null;
 
-        // include role for jwt callback
         return {
           id: user.id,
           email: user.email,
@@ -47,23 +46,46 @@ const config = {
   ],
 
   callbacks: {
-    async jwt({ token, user }) {
+    // Type the destructured params explicitly to avoid implicit any
+    async jwt(
+      {
+        token,
+        user,
+      }: {
+        token: Record<string, unknown>;
+        user?: Record<string, unknown> | null;
+      }
+    ) {
       if (user) {
-        (token as Record<string, unknown>)["role"] =
-          (user as Record<string, unknown>)["role"] ?? "USER";
+        token["role"] = (user["role"] as Role | undefined) ?? "USER";
       }
       return token;
     },
 
-    async session({ session, token }) {
+    async session(
+      {
+        session,
+        token,
+      }: {
+        session: { user?: Record<string, unknown> | null };
+        token: Record<string, unknown>;
+      }
+    ) {
       if (session.user) {
-        (session.user as Record<string, unknown>)["role"] =
-          (token as Record<string, unknown>)["role"] ?? "USER";
+        session.user["role"] = (token["role"] as Role | undefined) ?? "USER";
       }
       return session;
     },
 
-    async redirect({ url, baseUrl }) {
+    async redirect(
+      {
+        url,
+        baseUrl,
+      }: {
+        url: string;
+        baseUrl: string;
+      }
+    ) {
       try {
         const u = new URL(url);
         const b = new URL(baseUrl);
