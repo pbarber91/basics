@@ -52,7 +52,7 @@ export default async function AccessRequestsPage({
     select: { id: true, title: true, slug: true },
   });
 
-  // Build WHERE for requests (typed)
+  // WHERE for requests (typed)
   const where: Prisma.AccessRequestWhereInput = {};
   if (courseId) where.courseId = courseId;
   if (status && status !== "ALL") where.status = status as RequestRow["status"];
@@ -76,7 +76,7 @@ export default async function AccessRequestsPage({
       createdAt: true,
       course: { select: { id: true, title: true, slug: true } },
     },
-    take: 200, // safety cap
+    take: 200,
   });
 
   /* --------------- Server Actions --------------- */
@@ -266,7 +266,10 @@ export default async function AccessRequestsPage({
                     <Td>{r.course.title}</Td>
                     <Td>{r.name}</Td>
                     <Td className="font-medium">{r.email}</Td>
-                    <Td className="max-w-[28ch] truncate" title={r.message ?? ""}>
+                    <Td
+                      className="max-w-[28ch] truncate"
+                      title={r.message ?? ""}
+                    >
                       {r.message ?? "—"}
                     </Td>
                     <Td>
@@ -329,13 +332,31 @@ export default async function AccessRequestsPage({
 }
 
 /* --------- tiny helpers --------- */
-function Th({ children, className }: { children: ReactNode; className?: string }) {
-  return <th className={clsx("px-3 py-2", className)}>{children}</th>;
+function Th({
+  children,
+  className,
+  ...props
+}: React.ComponentPropsWithoutRef<"th"> & { children: ReactNode }) {
+  return (
+    <th {...props} className={clsx("px-3 py-2", className)}>
+      {children}
+    </th>
+  );
 }
-function Td({ children, className }: { children: ReactNode; className?: string }) {
-  return <td className={clsx("px-3 py-2 align-middle", className)}>{children}</td>;
+
+function Td({
+  children,
+  className,
+  ...props
+}: React.ComponentPropsWithoutRef<"td"> & { children: ReactNode }) {
+  return (
+    <td {...props} className={clsx("px-3 py-2 align-middle", className)}>
+      {children}
+    </td>
+  );
 }
-function formatDateTime(d: Date | string) {
+
+function formatDateTime(d: Date | string | number) {
   try {
     return new Intl.DateTimeFormat("en-US", {
       dateStyle: "medium",
