@@ -13,9 +13,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import clsx from "clsx";
+import type { TextareaHTMLAttributes } from "react";
 
 // Simple styled textarea (no external import)
-function TextArea(props: React.ComponentPropsWithoutRef("textarea")) {
+function TextArea(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return (
     <textarea
       {...props}
