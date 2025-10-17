@@ -1,17 +1,19 @@
 // lib/auth.ts
-import NextAuth, { type NextAuthOptions } from "next-auth";
+import NextAuth from "next-auth";
+import type { AuthConfig } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import { PrismaAdapter } from "@auth/prisma-adapter";
-import { prisma } from "./db"; // see optional singleton below (or use new PrismaClient())
+import { prisma } from "./db";
 import bcrypt from "bcryptjs";
 
-export const authOptions: NextAuthOptions = {
+// Optional, to avoid Edge warnings when using bcrypt/Prisma
+export const runtime = "nodejs";
+
+type Role = "ADMIN" | "LEADER" | "USER";
+
+const authConfig = {
   adapter: PrismaAdapter(prisma),
-
-  // IMPORTANT: Credentials requires JWT strategy in v5
-  session: { strategy: "jwt" },
-    trustHost: true,
-
+  session: { strategy: "jwt" as const },
   providers: [
     Credentials({
       name: "Credentials",
@@ -20,43 +22,74 @@ export const authOptions: NextAuthOptions = {
         password: { label: "Password", type: "password" },
       },
       async authorize(creds) {
-        if (!creds?.email || !creds.password) return null;
-        const user = await prisma.user.findUnique({ where: { email: creds.email } });
-        if (!user) return null;
-        const ok = await bcrypt.compare(creds.password, user.password);
+        const email = (creds?.email ?? "").toString().toLowerCase().trim();
+        const password = (creds?.password ?? "").toString();
+
+        if (!email || !password) return null;
+
+        const user = await prisma.user.findUnique({
+          where: { email },
+          // We need password + role for auth; `password` should exist in your schema
+          select: { id: true, email: true, name: true, password: true, role: true },
+        });
+
+        if (!user || !user.password) return null;
+
+        const ok = await bcrypt.compare(password, user.password);
         if (!ok) return null;
 
-        // Return a minimal user object for the JWT
-        return { id: user.id, email: user.email, name: user.name, role: user.role } as any;
+        // return *only* what NextAuth needs on the User object, include role for callbacks
+        return {
+          id: user.id,
+          email: user.email,
+          name: user.name ?? null,
+          role: (user.role ?? "USER") as Role,
+        } as unknown as Record<string, unknown>;
       },
     }),
   ],
 
-  pages: { signIn: "/signin" },
-
   callbacks: {
-    // Put role into the JWT
     async jwt({ token, user }) {
-      if (user) token.role = (user as any).role ?? "USER";
+      // On sign in, copy role from returned user -> token
+      if (user) {
+        (token as Record<string, unknown>)["role"] =
+          (user as Record<string, unknown>)["role"] ?? "USER";
+      }
       return token;
     },
-    // Expose role on the session
+
     async session({ session, token }) {
-      if (session.user && token?.role) (session.user as any).role = token.role;
+      // Expose role onto the session.user object
+      if (session.user) {
+        (session.user as Record<string, unknown>)["role"] =
+          (token as Record<string, unknown>)["role"] ?? "USER";
+      }
       return session;
     },
-     async redirect({ url, baseUrl }) {
-    // Allow relative URLs
-    if (url.startsWith("/")) return `${baseUrl}${url}`;
-    // Allow same-origin absolute URLs
-    try {
-      const u = new URL(url);
-      if (u.origin === baseUrl) return url;
-    } catch {}
-    // Fallback after sign-in/sign-out
-    return `${baseUrl}/program`;
-  },
-  },
-};
 
-export const { auth, handlers: { GET, POST } } = NextAuth(authOptions);
+    // Optional: keep redirects tidy
+    async redirect({ url, baseUrl }) {
+      try {
+        const u = new URL(url);
+        const b = new URL(baseUrl);
+        // allow same-origin or relative
+        if (u.origin === b.origin) return url;
+        return baseUrl;
+      } catch {
+        return baseUrl;
+      }
+    },
+  },
+
+  pages: {
+    signIn: "/signin",
+  },
+} satisfies AuthConfig;
+
+export const {
+  handlers: { GET, POST },
+  auth,
+  signIn,
+  signOut,
+} = NextAuth(authConfig);
