@@ -1,5 +1,13 @@
 // app/program/[week]/page.tsx
 import { redirect } from "next/navigation";
-export default function SessionRedirect({ params }: { params: { week: string } }) {
-  redirect(`/courses/basics/${params.week}`);
+
+type Params = { week: string };
+
+export default async function SessionRedirect({
+  params,
+}: {
+  params: Promise<Params>;
+}) {
+  const { week } = await params; // Next 15: await params
+  redirect(`/courses/basics/${encodeURIComponent(week)}`);
 }
