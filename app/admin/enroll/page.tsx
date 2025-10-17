@@ -173,7 +173,7 @@ export default async function EnrollPage({
                 className="w-full rounded-md border border-border bg-background p-2 text-sm"
               >
                 <option value="">— Select a course —</option>
-                {courses.map((c) => (
+                {courses.map((c: typeof courses[number]) => (
                   <option key={c.id} value={c.id}>
                     {c.title} {c.isPublished ? "" : "(Draft)"}
                   </option>
@@ -231,7 +231,7 @@ export default async function EnrollPage({
                 </tr>
               </thead>
               <tbody>
-                {users.map((u) => {
+                {users.map((u: typeof users[number]) => {
                   const isEnrolled = selectedCourseId ? enrolledSet.has(u.id) : false;
                   return (
                     <tr key={u.id} className="border-b border-border last:border-0">

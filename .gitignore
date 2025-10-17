@@ -24,3 +24,4 @@ public/uploads/
 Thumbs.db
 .vscode/
 "@ | Set-Content .gitignore -Encoding UTF8
+.vercel
