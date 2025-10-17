@@ -461,7 +461,7 @@ export default async function AdminCourseDetailPage({
                 </tr>
               </thead>
               <tbody>
-                {course.enrollments.map((e) => (
+                {course.enrollments.map((e: typeof course.enrollments[number]) => (
                   <tr key={e.id} className="border-b border-border last:border-0">
                     <Td>{e.user.name ?? "—"}</Td>
                     <Td className="font-medium">{e.user.email}</Td>
