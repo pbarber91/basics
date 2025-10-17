@@ -1,7 +1,10 @@
 // app/courses/[slug]/[index]/page.tsx
-import { notFound, redirect } from "next/navigation";
-import { prisma } from "@/lib/db";
+export const runtime = "nodejs"; // avoid Edge; Prisma/bcrypt need Node APIs
+
 import { auth } from "@/lib/auth";
+import { prisma } from "@/lib/db";
+import { canAccessCourse } from "@/lib/acl";
+import { notFound, redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 
 import Breadcrumbs from "@/components/Breadcrumbs";
@@ -11,112 +14,179 @@ import TranscriptToggle from "@/components/TranscriptToggle";
 import SessionGuide from "@/components/SessionGuide";
 import ResourcesList from "@/components/ResourcesList";
 import ReflectionJournal from "@/components/ReflectionJournal";
+import { Card, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 
-export default async function SessionPage({ params }: { params: { slug: string; index: string } }) {
+type Params = { slug: string; index: string };
+
+export default async function CourseSessionPage({
+  params,
+}: {
+  params: Promise<Params>; // ✅ Next 15 requires Promise
+}) {
+  const { slug, index } = await params; // ✅ await the params
+  const weekNumber = Number(index);
+  if (!Number.isFinite(weekNumber) || weekNumber < 1) return notFound();
+
+  // Require auth
   const session = await auth();
-  const email = session?.user?.email;
-  const role = (session?.user as any)?.role ?? "USER";
-  if (!email) redirect("/signin");
+  if (!session?.user?.email) redirect("/signin");
+  const role = (session.user as any)?.role ?? "USER";
 
-  const me = await prisma.user.findUnique({ where: { email }, select: { id: true } });
-  if (!me) redirect("/signin");
-
-  const course = await prisma.course.findUnique({
-    where: { slug: params.slug },
-    include: { sessions: { orderBy: { index: "asc" } } },
-  });
-  if (!course || !course.isPublished) return notFound();
-
-  const idx = Number(params.index);
-  const s = course.sessions.find((x) => x.index === idx);
-  if (!s) return notFound();
-
-  const completedCount = await prisma.progress.count({
-    where: { userId: me.id, session: { courseId: course.id } },
-  });
-
-  const thisCompleted = await prisma.progress.findUnique({
-    where: { userId_sessionId: { userId: me.id, sessionId: s.id } },
+  // Resolve current user
+  const me = await prisma.user.findUnique({
+    where: { email: session.user.email },
     select: { id: true },
   });
+  if (!me) redirect("/signin");
 
+  // Find course + this session
+  const course = await prisma.course.findUnique({
+    where: { slug },
+    select: {
+      id: true,
+      title: true,
+      summary: true,
+      thumbnail: true,
+      isPublished: true,
+      sessions: {
+        where: { index: weekNumber },
+        select: {
+          id: true,
+          index: true,
+          title: true,
+          summary: true,
+          videoUrl: true,
+          captionsVttUrl: true,
+          transcript: true,
+          guideOnlineUrl: true,
+          guidePdfUrl: true,
+          thumbnail: true,
+        },
+      },
+      _count: { select: { sessions: true } },
+    },
+  });
+  if (!course) return notFound();
+
+  // Enforce enrollment for USERs
+  const allowed = await canAccessCourse({ userId: me.id, role, courseId: course.id });
+  if (!allowed) redirect("/courses");
+
+  const s = course.sessions[0];
+  if (!s) return notFound();
+
+  // Progress metrics for this course (optional: you might scope Progress by course later)
+  const [completedCount, thisWeekProgress] = await Promise.all([
+    prisma.progress.count({ where: { userId: me.id } }),
+    prisma.progress.findUnique({
+      where: { userId_weekNumber: { userId: me.id, weekNumber } },
+      select: { id: true },
+    }),
+  ]);
+  const thisWeekDone = Boolean(thisWeekProgress);
+  const progressCurrent = completedCount > 0 ? completedCount : weekNumber;
+  const totalWeeks = course._count.sessions;
+
+  // Mark complete action
   async function markComplete() {
     "use server";
-    const a = await auth();
-    const em = a?.user?.email;
-    if (!em) redirect("/signin");
-    const user = await prisma.user.findUnique({ where: { email: em }, select: { id: true } });
+    const cur = await auth();
+    const email = cur?.user?.email;
+    if (!email) redirect("/signin");
+
+    const user = await prisma.user.findUnique({
+      where: { email },
+      select: { id: true },
+    });
     if (!user) redirect("/signin");
 
+    // NOTE: current Progress model is global by weekNumber.
+    // If you add course-scoped progress later, change this accordingly.
     await prisma.progress.upsert({
-      where: { userId_sessionId: { userId: user.id, sessionId: s.id } },
+      where: { userId_weekNumber: { userId: user.id, weekNumber } },
       update: {},
-      create: { userId: user.id, sessionId: s.id },
+      create: { userId: user.id, weekNumber },
     });
 
-    revalidatePath(`/courses/${course.slug}/${idx}`);
-    revalidatePath(`/courses/${course.slug}`);
+    revalidatePath(`/courses/${slug}/${weekNumber}`);
   }
-
-  const total = course.sessions.length;
 
   return (
     <section className="space-y-6">
+      {/* Header row */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <Breadcrumbs trail={[
-          { label: "Home", href: "/" },
-          { label: "Courses", href: "/courses" },
-          { label: course.title, href: `/courses/${course.slug}` },
-          { label: `Session ${s.index}` },
-        ]}/>
-        <ProgressChip current={Math.max(completedCount, s.index)} total={total} />
+        <Breadcrumbs
+          trail={[
+            { label: "Home", href: "/" },
+            { label: "Courses", href: "/courses" },
+            { label: course.title, href: `/courses/${slug}` },
+            { label: `Week ${s.index}` },
+          ]}
+        />
+        <ProgressChip current={progressCurrent} total={totalWeeks} />
       </div>
 
-      <header className="rounded-xl border border-border bg-card p-4">
-        <div className="flex items-center justify-between gap-3">
-          <h1 className="text-2xl font-bold">Session {s.index}: {s.title}</h1>
-          {thisCompleted && (
-            <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-xs text-white">Completed</span>
-          )}
-        </div>
-        <p className="mt-1 text-muted-foreground">{s.summary}</p>
-      </header>
+      {/* Title card */}
+      <Card className="border border-border bg-card">
+        <CardContent className="p-4">
+          <div className="flex items-center justify-between gap-3">
+            <h1 className="text-2xl font-bold">
+              Week {s.index}: {s.title}
+            </h1>
+            {thisWeekDone && (
+              <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-xs text-white">
+                Completed
+              </span>
+            )}
+          </div>
+          <p className="mt-1 text-muted-foreground">{s.summary}</p>
+        </CardContent>
+      </Card>
 
-      <div className="rounded-xl border border-border bg-card p-4">
-        <VideoPlayer src={s.videoUrl} captionsVttUrl={s.captionsVttUrl ?? undefined} />
-        <div className="mt-4">
-          <TranscriptToggle text={s.transcript ?? ""} />
-        </div>
-      </div>
+      {/* Video + transcript */}
+      <Card className="border border-border bg-card">
+        <CardContent className="p-4">
+          <VideoPlayer src={s.videoUrl} captionsVttUrl={s.captionsVttUrl ?? undefined} />
+          <div className="mt-4">
+            <TranscriptToggle text={s.transcript ?? ""} />
+          </div>
+        </CardContent>
+      </Card>
 
+      {/* Guides & resources */}
       <div className="grid gap-4 md:grid-cols-2">
-        <div className="rounded-xl border border-border bg-card p-4">
-          <SessionGuide onlineUrl={s.guideOnlineUrl} pdfUrl={s.guidePdfUrl} />
-        </div>
-        <div className="rounded-xl border border-border bg-card p-4">
-          {/* fetch resources from DB if you move them there; placeholder below */}
-          <ResourcesList
-            items={[]}
-            role={role as "USER" | "LEADER" | "ADMIN"}
-          />
-        </div>
+        <Card className="border border-border bg-card">
+          <CardContent className="p-4">
+            <SessionGuide onlineUrl={s.guideOnlineUrl} pdfUrl={s.guidePdfUrl} />
+          </CardContent>
+        </Card>
+        <Card className="border border-border bg-card">
+          <CardContent className="p-4">
+            {/* If you later store per-session resources in DB, render them here.
+               For now, leave this placeholder component or remove it. */}
+            <ResourcesList items={[]} role={role as "USER" | "LEADER" | "ADMIN"} />
+          </CardContent>
+        </Card>
       </div>
 
-      <div className="rounded-xl border border-border bg-card p-4">
-        <ReflectionJournal weekNumber={s.index} prompts={[]} />
-      </div>
+      {/* Reflection journal (still keyed by weekNumber) */}
+      <Card className="border border-border bg-card">
+        <CardContent className="p-4">
+          <ReflectionJournal weekNumber={weekNumber} prompts={[]} />
+        </CardContent>
+      </Card>
 
-      <div className="flex items-center gap-3">
+      {/* Actions */}
+      <div className="flex flex-wrap items-center gap-3">
         <form action={markComplete}>
-          <button
-            type="submit"
-            disabled={Boolean(thisCompleted)}
-            className="rounded-lg border border-border bg-background px-3 py-2 hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {thisCompleted ? "Already completed" : "Mark session complete"}
-          </button>
+          <Button type="submit" disabled={thisWeekDone}>
+            {thisWeekDone ? "Already completed" : "Mark week complete"}
+          </Button>
         </form>
-        <a className="text-sm underline" href={`/courses/${course.slug}`}>Back to Course</a>
+        <a className="text-sm underline" href={`/courses/${slug}`}>
+          Back to Course
+        </a>
       </div>
     </section>
   );
