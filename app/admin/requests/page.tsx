@@ -1,4 +1,9 @@
 // app/admin/requests/page.tsx
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+import type { ReactNode } from "react";
+import type { Prisma } from "@prisma/client";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { redirect } from "next/navigation";
@@ -11,12 +16,28 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 
-export const dynamic = "force-dynamic";
+type SearchParams = {
+  q?: string;
+  status?: string;
+  courseId?: string;
+};
+
+type CourseLite = { id: string; title: string; slug: string };
+
+type RequestRow = {
+  id: string;
+  name: string | null;
+  email: string;
+  message: string | null;
+  status: "PENDING" | "APPROVED" | "REJECTED";
+  createdAt: Date;
+  course: CourseLite;
+};
 
 export default async function AccessRequestsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; status?: string; courseId?: string }>;
+  searchParams: Promise<SearchParams>;
 }) {
   const { q = "", status = "PENDING", courseId = "" } = await searchParams;
 
@@ -26,15 +47,15 @@ export default async function AccessRequestsPage({
   if (role !== "ADMIN" && role !== "LEADER") redirect("/forbidden");
 
   // Course filter dropdown
-  const courses = await prisma.course.findMany({
+  const courses: CourseLite[] = await prisma.course.findMany({
     orderBy: { title: "asc" },
     select: { id: true, title: true, slug: true },
   });
 
-  // Build WHERE for requests
-  const where: any = {};
+  // Build WHERE for requests (typed)
+  const where: Prisma.AccessRequestWhereInput = {};
   if (courseId) where.courseId = courseId;
-  if (status && status !== "ALL") where.status = status;
+  if (status && status !== "ALL") where.status = status as RequestRow["status"];
   if (q) {
     where.OR = [
       { email: { contains: q } },
@@ -43,7 +64,7 @@ export default async function AccessRequestsPage({
     ];
   }
 
-  const requests = await prisma.accessRequest.findMany({
+  const requests: RequestRow[] = await prisma.accessRequest.findMany({
     where,
     orderBy: { createdAt: "desc" },
     select: {
@@ -180,7 +201,7 @@ export default async function AccessRequestsPage({
                 className="w-full rounded-md border border-border bg-background p-2 text-sm"
               >
                 <option value="">All courses</option>
-                {courses.map((c) => (
+                {courses.map((c: CourseLite) => (
                   <option key={c.id} value={c.id}>
                     {c.title}
                   </option>
@@ -239,7 +260,7 @@ export default async function AccessRequestsPage({
                 </tr>
               </thead>
               <tbody>
-                {requests.map((r) => (
+                {requests.map((r: RequestRow) => (
                   <tr key={r.id} className="border-b border-border last:border-0">
                     <Td>{formatDateTime(r.createdAt)}</Td>
                     <Td>{r.course.title}</Td>
@@ -252,9 +273,12 @@ export default async function AccessRequestsPage({
                       <span
                         className={clsx(
                           "rounded-full px-2 py-0.5 text-xs",
-                          r.status === "PENDING" && "border border-amber-500/30 bg-amber-500/10 text-amber-300",
-                          r.status === "APPROVED" && "border border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
-                          r.status === "REJECTED" && "border border-rose-500/30 bg-rose-500/10 text-rose-300"
+                          r.status === "PENDING" &&
+                            "border border-amber-500/30 bg-amber-500/10 text-amber-300",
+                          r.status === "APPROVED" &&
+                            "border border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
+                          r.status === "REJECTED" &&
+                            "border border-rose-500/30 bg-rose-500/10 text-rose-300"
                         )}
                       >
                         {r.status}
@@ -305,13 +329,13 @@ export default async function AccessRequestsPage({
 }
 
 /* --------- tiny helpers --------- */
-function Th({ children, className }: { children: React.ReactNode; className?: string }) {
+function Th({ children, className }: { children: ReactNode; className?: string }) {
   return <th className={clsx("px-3 py-2", className)}>{children}</th>;
 }
-function Td({ children, className }: { children: React.ReactNode; className?: string }) {
+function Td({ children, className }: { children: ReactNode; className?: string }) {
   return <td className={clsx("px-3 py-2 align-middle", className)}>{children}</td>;
 }
-function formatDateTime(d: Date) {
+function formatDateTime(d: Date | string) {
   try {
     return new Intl.DateTimeFormat("en-US", {
       dateStyle: "medium",
