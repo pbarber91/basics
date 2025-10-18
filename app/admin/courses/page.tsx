@@ -1,4 +1,4 @@
-// app/courses/page.tsx
+// app/admin/courses/page.tsx
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { redirect } from "next/navigation";
@@ -8,153 +8,130 @@ import { Button } from "@/components/ui/button";
 
 type Role = "USER" | "LEADER" | "ADMIN";
 
-type CourseCard = {
-  id: string;
-  slug: string;
-  title: string;
-  summary: string | null;
-  thumbnail: string | null;
-  isPublished: boolean;
-  _count: { sessions: number };
-};
-
-export default async function CoursesIndexPage() {
+export default async function AdminCoursesPage() {
   const session = await auth();
-  if (!session?.user?.email) redirect("/signin");
+  const role: Role = ((session?.user ?? {}) as { role?: Role }).role ?? "USER";
+  if (!session?.user?.email || (role !== "ADMIN" && role !== "LEADER")) {
+    redirect("/forbidden");
+  }
 
-  const role: Role = ((session.user ?? {}) as { role?: Role }).role ?? "USER";
-
-  const me = await prisma.user.findUnique({
-    where: { email: session.user.email },
-    select: { id: true },
+  // Load courses with counts
+  const courses = await prisma.course.findMany({
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      slug: true,
+      title: true,
+      summary: true,
+      isPublished: true,
+      _count: { select: { sessions: true, enrollments: true } },
+    },
   });
-  if (!me) redirect("/signin");
 
-  let courses: CourseCard[] = [];
+  // ===== compute completion across all users WITHOUT assuming courseId in Progress
+  const courseIds = courses.map((c) => c.id);
+  let completedByCourse: Record<string, number> = {};
+  if (courseIds.length) {
+    const sessions = await prisma.session.findMany({
+      where: { courseId: { in: courseIds } },
+      select: { id: true, courseId: true },
+    });
 
-  if (role === "ADMIN" || role === "LEADER") {
-    // Staff: see all courses with session counts
-    courses = await prisma.course.findMany({
-      orderBy: { createdAt: "desc" },
-      select: {
-        id: true,
-        slug: true,
-        title: true,
-        summary: true,
-        thumbnail: true,
-        isPublished: true,
-        _count: { select: { sessions: true } },
-      },
-    });
-  } else {
-    // Users: only courses they are enrolled in and published
-    const courseIds = await prisma.enrollment.findMany({
-      where: { userId: me.id, status: "ACTIVE" },
-      select: { courseId: true },
-    });
-    const ids = courseIds.map((e) => e.courseId);
-    if (ids.length) {
-      courses = await prisma.course.findMany({
-        where: { id: { in: ids }, isPublished: true },
-        orderBy: { createdAt: "desc" },
-        select: {
-          id: true,
-          slug: true,
-          title: true,
-          summary: true,
-          thumbnail: true,
-          isPublished: true,
-          _count: { select: { sessions: true } },
-        },
+    const sessionToCourse = new Map<string, string>();
+    const allSessionIds: string[] = [];
+    for (const s of sessions) {
+      sessionToCourse.set(s.id, s.courseId);
+      allSessionIds.push(s.id);
+    }
+
+    if (allSessionIds.length) {
+      const allProgress = await prisma.progress.findMany({
+        where: { sessionId: { in: allSessionIds } },
+        select: { sessionId: true },
       });
+
+      // Count rows per course
+      const tally: Record<string, number> = {};
+      for (const p of allProgress) {
+        const cid = sessionToCourse.get(p.sessionId);
+        if (!cid) continue;
+        tally[cid] = (tally[cid] ?? 0) + 1;
+      }
+      completedByCourse = tally;
     }
   }
-
-  // Pull user progress for quick “Continue” hints
-  const progressByCourse: Record<string, number> = {};
-  if (courses.length) {
-    const progress = await prisma.progress.groupBy({
-      by: ["courseId"],
-      where: { userId: me.id },
-      _count: { _all: true },
-    });
-    for (const p of progress) progressByCourse[p.courseId] = p._count._all;
-  }
+  // ===== end aggregation
 
   return (
     <section className="space-y-6">
       <Card className="border border-border bg-card">
-        <CardHeader className="flex flex-row items-center justify-between">
+        <CardHeader className="flex items-center justify-between">
           <CardTitle>Courses</CardTitle>
-          {(role === "ADMIN" || role === "LEADER") && (
-            <Link href="/admin/courses">
-              <Button size="sm" variant="outline">Manage</Button>
-            </Link>
-          )}
+          <Link href="/admin">
+            <Button size="sm" variant="outline">Back to Admin</Button>
+          </Link>
         </CardHeader>
 
-        <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {courses.map((c) => {
-            const completed = progressByCourse[c.id] ?? 0;
-            const total = c._count.sessions || 0;
-            const pct = total ? Math.round((completed / total) * 100) : 0;
-
-            return (
-              <article
-                key={c.id}
-                className="overflow-hidden rounded-xl border border-border bg-background"
-              >
-                {c.thumbnail ? (
-                  <img src={c.thumbnail} alt="" className="h-40 w-full object-cover" />
-                ) : (
-                  <div className="h-40 w-full bg-muted" />
-                )}
-                <div className="p-4">
-                  <div className="flex items-start justify-between gap-2">
-                    <h3 className="text-lg font-semibold">{c.title}</h3>
-                    {(role === "ADMIN" || role === "LEADER") && !c.isPublished && (
-                      <span className="rounded bg-amber-500/15 px-2 py-0.5 text-xs text-amber-400">
-                        Draft
-                      </span>
-                    )}
-                  </div>
-
-                  {c.summary && (
-                    <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
-                      {c.summary}
-                    </p>
-                  )}
-
-                  <div className="mt-3">
-                    <div className="h-2 w-full rounded bg-muted">
-                      <div
-                        className="h-2 rounded bg-primary"
-                        style={{ width: `${pct}%` }}
-                        aria-label={`Progress ${pct}%`}
-                      />
-                    </div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      {completed}/{total} sessions • {pct}%
-                    </div>
-                  </div>
-
-                  <div className="mt-3 flex items-center justify-between">
-                    <Link href={`/courses/${c.slug}`}>
-                      <Button size="sm">{completed ? "Continue" : "View course"}</Button>
-                    </Link>
-                    <span className="text-xs text-muted-foreground">
-                      {total} session{total === 1 ? "" : "s"}
-                    </span>
-                  </div>
-                </div>
-              </article>
-            );
-          })}
-
-          {courses.length === 0 && (
-            <div className="col-span-full rounded-xl border border-border bg-background p-6 text-center text-sm text-muted-foreground">
-              You don’t have access to any courses yet. An Admin or Leader will enroll you.
+        <CardContent className="grid gap-3">
+          {courses.length === 0 ? (
+            <div className="rounded-lg border border-border bg-background p-4 text-sm text-muted-foreground">
+              No courses yet.
             </div>
+          ) : (
+            <ul className="divide-y divide-border rounded-lg border border-border bg-background">
+              {courses.map((c) => {
+                const totalCells = c._count.sessions * c._count.enrollments;
+                const completed = completedByCourse[c.id] ?? 0;
+                const pct = totalCells ? Math.round((completed / totalCells) * 100) : 0;
+
+                return (
+                  <li
+                    key={c.id}
+                    className="grid grid-cols-1 gap-2 p-3 sm:grid-cols-[1fr_auto]"
+                  >
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <Link href={`/courses/${c.slug}`} className="font-medium hover:underline">
+                          {c.title}
+                        </Link>
+                        {!c.isPublished && (
+                          <span className="rounded bg-amber-500/15 px-2 py-0.5 text-xs text-amber-400">
+                            Draft
+                          </span>
+                        )}
+                      </div>
+                      {c.summary && (
+                        <div className="text-sm text-muted-foreground line-clamp-2">
+                          {c.summary}
+                        </div>
+                      )}
+
+                      <div className="mt-2 grid gap-1 text-xs text-muted-foreground sm:grid-cols-3">
+                        <div>Sessions: {c._count.sessions}</div>
+                        <div>Enrollments: {c._count.enrollments}</div>
+                        <div>Completion: {pct}%</div>
+                      </div>
+
+                      <div className="mt-2 h-2 w-full rounded bg-muted">
+                        <div
+                          className="h-2 rounded bg-primary"
+                          style={{ width: `${pct}%` }}
+                          aria-label={`Completion ${pct}%`}
+                        />
+                      </div>
+                    </div>
+                    <div className="flex items-start justify-start gap-2 sm:justify-end">
+                      <Link href={`/admin/enroll?course=${encodeURIComponent(c.slug)}`}>
+                        <Button size="sm" variant="outline">Manage Enrollments</Button>
+                      </Link>
+                      <Link href={`/admin/courses/${c.id}`}>
+                        <Button size="sm" variant="ghost">Details</Button>
+                      </Link>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
           )}
         </CardContent>
       </Card>
