@@ -1,34 +1,22 @@
 // app/admin/courses/[id]/page.tsx
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { redirect } from "next/navigation";
-import Link from "next/link";
+import { redirect, notFound } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 
-type Params = Promise<{ id: string }>;
+type Params = { id: string };
 
-type Role = "USER" | "LEADER" | "ADMIN";
-type SafeUser = { role?: Role };
-
-export default async function AdminCourseDetailPage({
-  params,
-}: {
-  params: Params;
-}) {
-  const { id } = await params;
-
+export default async function AdminCourseDetailPage({ params }: { params: Params }) {
   const session = await auth();
-  // ✅ Guard first so TS knows session is defined below
   if (!session?.user?.email) redirect("/signin");
 
-  // ✅ Now it's safe to access session.user
-  const role: Role = (session.user as SafeUser).role ?? "USER";
+  // derive role safely (no `any`)
+  type SafeUser = { role?: "USER" | "LEADER" | "ADMIN" };
+  const role = ((session.user ?? {}) as SafeUser).role ?? "USER";
   if (role !== "ADMIN" && role !== "LEADER") redirect("/forbidden");
 
-  // Load course with counts we need
   const course = await prisma.course.findUnique({
-    where: { id },
+    where: { id: params.id },
     select: {
       id: true,
       title: true,
@@ -40,99 +28,61 @@ export default async function AdminCourseDetailPage({
           enrollments: true,
         },
       },
-      sessions: {
-        orderBy: { index: "asc" },
-        select: { id: true, index: true, title: true },
-      },
     },
   });
 
-  if (!course) {
-    redirect("/admin/courses");
-  }
+  if (!course) notFound();
 
-  // Cells = (# sessions) * (# enrollments)
-  const totalCells =
-    (course._count.sessions ?? 0) * (course._count.enrollments ?? 0);
+  const sessionsCount = course._count.sessions ?? 0;
+  const enrollmentsCount = course._count.enrollments ?? 0;
+  const totalCells = sessionsCount * enrollmentsCount;
 
-  // ✅ Count progress rows for this course via relation:
-  // Progress -> courseSession -> courseId
-  const completedCells =
-    totalCells > 0
-      ? await prisma.progress.count({
-          where: { courseSession: { courseId: course.id } },
-        })
-      : 0;
+  // ✅ Correct relation path: Progress -> session -> courseId
+  const completedCells = totalCells
+    ? await prisma.progress.count({
+        where: { session: { courseId: course.id } },
+      })
+    : 0;
 
-  const completionPct =
-    totalCells > 0 ? Math.round((completedCells / totalCells) * 100) : 0;
+  const completionPct = totalCells ? Math.round((completedCells / totalCells) * 100) : 0;
 
   return (
     <section className="space-y-6">
       <Card className="border border-border bg-card">
-        <CardHeader className="flex flex-row items-center justify-between">
-          <div>
-            <CardTitle className="text-xl">Course</CardTitle>
-            <p className="text-sm text-muted-foreground">{course.title}</p>
-          </div>
-          <div className="flex gap-2">
-            <Link href="/admin/courses">
-              <Button variant="outline" size="sm">
-                All courses
-              </Button>
-            </Link>
-            <Link href={`/courses/${course.slug}`}>
-              <Button size="sm">View public page</Button>
-            </Link>
-          </div>
-        </CardHeader>
-        <CardContent className="grid gap-3 sm:grid-cols-4">
-          <Stat label="Sessions" value={course._count.sessions} />
-          <Stat label="Enrollments" value={course._count.enrollments} />
-          <Stat label="Completed cells" value={completedCells} />
-          <Stat label="Completion" value={`${completionPct}%`} />
-        </CardContent>
-      </Card>
-
-      <Card className="border border-border bg-card">
         <CardHeader>
-          <CardTitle>Sessions</CardTitle>
+          <CardTitle className="text-xl">Course overview</CardTitle>
         </CardHeader>
-        <CardContent className="grid gap-3">
-          {course.sessions.map((s) => (
-            <div
-              key={s.id}
-              className="flex items-center justify-between rounded-lg border border-border bg-background p-3"
-            >
-              <div>
-                <div className="text-sm uppercase tracking-wide text-muted-foreground">
-                  Week {s.index}
-                </div>
-                <div className="font-medium">{s.title}</div>
-              </div>
-              <Link href={`/courses/${course.slug}/${s.index}`}>
-                <Button size="sm">Open</Button>
-              </Link>
+        <CardContent className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <Stat label="Title" value={course.title} />
+            <Stat label="Slug" value={course.slug} />
+            <Stat label="Status" value={course.isPublished ? "Published" : "Draft"} />
+            <Stat label="Sessions" value={sessionsCount.toString()} />
+            <Stat label="Enrollments" value={enrollmentsCount.toString()} />
+            <Stat label="Progress cells" value={`${completedCells} / ${totalCells}`} />
+          </div>
+          <div className="rounded-lg border border-border bg-background p-4">
+            <p className="text-sm text-muted-foreground">Completion</p>
+            <div className="mt-2 h-2 w-full overflow-hidden rounded bg-muted">
+              <div
+                className="h-full bg-primary transition-all"
+                style={{ width: `${completionPct}%` }}
+                aria-label="Completion percentage"
+              />
             </div>
-          ))}
-          {course.sessions.length === 0 && (
-            <div className="rounded-lg border border-border bg-background p-4 text-sm text-muted-foreground">
-              No sessions yet.
-            </div>
-          )}
+            <p className="mt-2 text-sm">{completionPct}%</p>
+          </div>
         </CardContent>
       </Card>
     </section>
   );
 }
 
-function Stat({ label, value }: { label: string; value: number | string }) {
+function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-lg border border-border bg-background p-3">
-      <div className="text-xs uppercase tracking-wide text-muted-foreground">
-        {label}
-      </div>
-      <div className="text-lg font-semibold">{value}</div>
+      <p className="text-xs uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className="mt-1 text-sm font-medium">{value}</p>
     </div>
   );
 }
