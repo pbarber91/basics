@@ -103,7 +103,7 @@ model Session {
   progress Progress[]
 
   @@unique([courseId, index])
-  @@map("Session")
+  @@map("CourseSession")
 }
 
 model Enrollment {
