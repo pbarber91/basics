@@ -6,28 +6,28 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 type Params = { id: string };
 
-export default async function AdminCourseDetailPage({ params }: { params: Params }) {
+export default async function AdminCourseDetailPage({
+  params,
+}: {
+  params: Promise<Params>;
+}) {
+  const { id } = await params;
+
   const session = await auth();
   if (!session?.user?.email) redirect("/signin");
 
-  // derive role safely (no `any`)
   type SafeUser = { role?: "USER" | "LEADER" | "ADMIN" };
   const role = ((session.user ?? {}) as SafeUser).role ?? "USER";
   if (role !== "ADMIN" && role !== "LEADER") redirect("/forbidden");
 
   const course = await prisma.course.findUnique({
-    where: { id: params.id },
+    where: { id },
     select: {
       id: true,
       title: true,
       slug: true,
       isPublished: true,
-      _count: {
-        select: {
-          sessions: true,
-          enrollments: true,
-        },
-      },
+      _count: { select: { sessions: true, enrollments: true } },
     },
   });
 
@@ -37,11 +37,8 @@ export default async function AdminCourseDetailPage({ params }: { params: Params
   const enrollmentsCount = course._count.enrollments ?? 0;
   const totalCells = sessionsCount * enrollmentsCount;
 
-  // ✅ Correct relation path: Progress -> session -> courseId
   const completedCells = totalCells
-    ? await prisma.progress.count({
-        where: { session: { courseId: course.id } },
-      })
+    ? await prisma.progress.count({ where: { session: { courseId: course.id } } })
     : 0;
 
   const completionPct = totalCells ? Math.round((completedCells / totalCells) * 100) : 0;
@@ -57,8 +54,8 @@ export default async function AdminCourseDetailPage({ params }: { params: Params
             <Stat label="Title" value={course.title} />
             <Stat label="Slug" value={course.slug} />
             <Stat label="Status" value={course.isPublished ? "Published" : "Draft"} />
-            <Stat label="Sessions" value={sessionsCount.toString()} />
-            <Stat label="Enrollments" value={enrollmentsCount.toString()} />
+            <Stat label="Sessions" value={String(sessionsCount)} />
+            <Stat label="Enrollments" value={String(enrollmentsCount)} />
             <Stat label="Progress cells" value={`${completedCells} / ${totalCells}`} />
           </div>
           <div className="rounded-lg border border-border bg-background p-4">
