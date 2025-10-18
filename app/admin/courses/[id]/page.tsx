@@ -8,6 +8,9 @@ import { Button } from "@/components/ui/button";
 
 type Params = Promise<{ id: string }>;
 
+type Role = "USER" | "LEADER" | "ADMIN";
+type SafeUser = { role?: Role };
+
 export default async function AdminCourseDetailPage({
   params,
 }: {
@@ -16,12 +19,11 @@ export default async function AdminCourseDetailPage({
   const { id } = await params;
 
   const session = await auth();
-  const email = session?.user?.email ?? null;
-  if (!email) redirect("/signin");
+  // ✅ Guard first so TS knows session is defined below
+  if (!session?.user?.email) redirect("/signin");
 
-  // derive role without using `any`
-  type SafeUser = { role?: "USER" | "LEADER" | "ADMIN" };
-  const role = ((session.user ?? {}) as SafeUser).role ?? "USER";
+  // ✅ Now it's safe to access session.user
+  const role: Role = (session.user as SafeUser).role ?? "USER";
   if (role !== "ADMIN" && role !== "LEADER") redirect("/forbidden");
 
   // Load course with counts we need
@@ -53,7 +55,7 @@ export default async function AdminCourseDetailPage({
   const totalCells =
     (course._count.sessions ?? 0) * (course._count.enrollments ?? 0);
 
-  // ✅ Count progress rows for this course by filtering through the relation
+  // ✅ Count progress rows for this course via relation:
   // Progress -> courseSession -> courseId
   const completedCells =
     totalCells > 0
