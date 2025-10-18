@@ -8,39 +8,38 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ---------- MODELS (mapped to your existing Postgres tables) ----------
+/* ----------------------- MODELS (match your SQL) ----------------------- */
 
 model User {
-  id             String          @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
-  name           String?
-  email          String          @unique
-  password       String
-  role           String          @default("USER")
-  createdAt      DateTime        @db.Timestamptz(6) @default(dbgenerated("now()"))
-  updatedAt      DateTime        @db.Timestamptz(6) @default(dbgenerated("now()"))
+  id        String   @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
+  name      String?
+  email     String   @unique
+  password  String
+  role      String   @default("USER")
+  createdAt DateTime @db.Timestamptz(6) @default(dbgenerated("now()"))
+  updatedAt DateTime @db.Timestamptz(6) @default(dbgenerated("now()"))
 
-  accounts       Account[]
-  sessionsAuth   SessionAuth[]   @map("sessionsAuth")
-  enrollments    Enrollment[]
-  progress       Progress[]
-  accessRequests AccessRequest[]
+  accounts     Account[]
+  sessionsAuth SessionAuth[]
+  enrollments  Enrollment[]
+  progress     Progress[]
 
   @@map("User")
 }
 
 model Account {
-  id                 String   @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
-  userId             String   @db.Uuid
-  type               String
-  provider           String
-  providerAccountId  String
-  refresh_token      String?
-  access_token       String?
-  expires_at         BigInt?
-  token_type         String?
-  scope              String?
-  id_token           String?
-  session_state      String?
+  id                String  @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
+  userId            String  @db.Uuid
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        BigInt?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -69,19 +68,18 @@ model VerificationToken {
 }
 
 model Course {
-  id          String      @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
-  slug        String      @unique
+  id          String   @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
+  slug        String   @unique
   title       String
   summary     String?
   thumbnail   String?
-  isPublished Boolean     @default(false) @map("isPublished")
-  createdAt   DateTime    @db.Timestamptz(6) @default(dbgenerated("now()"))
-  updatedAt   DateTime    @db.Timestamptz(6) @default(dbgenerated("now()"))
+  isPublished Boolean  @default(false) @map("isPublished")
+  createdAt   DateTime @db.Timestamptz(6) @default(dbgenerated("now()"))
+  updatedAt   DateTime @db.Timestamptz(6) @default(dbgenerated("now()"))
 
-  sessions     Session[]
-  enrollments  Enrollment[]
-  progress     Progress[]
-  requests     AccessRequest[]
+  sessions    Session[]
+  enrollments Enrollment[]
+  requests    AccessRequest[]
 
   @@map("Course")
 }
@@ -123,16 +121,13 @@ model Enrollment {
 }
 
 model Progress {
-  id         String   @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
-  userId     String   @db.Uuid
-  sessionId  String   @db.Uuid
-  createdAt  DateTime @db.Timestamptz(6) @default(dbgenerated("now()"))
+  id        String   @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
+  userId    String   @db.Uuid
+  sessionId String   @db.Uuid
+  createdAt DateTime @db.Timestamptz(6) @default(dbgenerated("now()"))
 
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-
-  // Convenience backrefs for aggregation – they don't create columns
-  course  Course? @relation(fields: [], references: [])
 
   @@unique([userId, sessionId])
   @@map("Progress")
