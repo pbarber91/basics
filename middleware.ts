@@ -1,47 +1,41 @@
 // middleware.ts
-import { auth } from "@/lib/auth";
+import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 
-type Role = "USER" | "LEADER" | "ADMIN" | string;
-
-function allowed(path: string, role?: Role) {
-  // public
-  if (
-    path === "/" ||
-    path.startsWith("/signin") ||
-    path.startsWith("/api/auth") ||
-    path.startsWith("/_next") ||
-    path.startsWith("/images") ||
-    path.startsWith("/brand") ||
-    path.startsWith("/videos") ||
-    path.startsWith("/captions") ||
-    path.startsWith("/signup") ||
-    path.startsWith("/guides")
-  ) return true;
-
-  const needsAuth = path.startsWith("/courses") || path.startsWith("/leader") || path.startsWith("/admin");
-  if (!needsAuth) return true;
-  if (!role) return false;
-
-  if (path.startsWith("/courses")) return role === "USER" || role === "LEADER" || role === "ADMIN";
-  if (path.startsWith("/leader"))  return role === "LEADER" || role === "ADMIN";
-  if (path.startsWith("/admin"))   return role === "ADMIN";
-  return true;
+/**
+ * Light-weight guard: checks for the Auth.js session cookie.
+ * Do NOT import "@/lib/auth", Prisma, bcrypt, etc. from middleware.
+ * Pages themselves still do robust server-side auth/role checks.
+ */
+function hasAuthCookie(req: NextRequest): boolean {
+  // Auth.js v5 cookie names (JWT session strategy)
+  return (
+    req.cookies.has("__Secure-authjs.session-token") ||
+    req.cookies.has("authjs.session-token")
+  );
 }
 
-export default auth((req) => {
-  const path = req.nextUrl.pathname;
-  const role = (req.auth?.user as any)?.role as Role | undefined;
+export function middleware(req: NextRequest) {
+  const { pathname } = req.nextUrl;
+  // Only run on protected paths (keep this list as small as possible)
+  const protectedPaths = ["/admin", "/leader", "/courses"];
+  const isProtected = protectedPaths.some((p) =>
+    pathname === p || pathname.startsWith(`${p}/`)
+  );
 
-  if (!allowed(path, role)) {
-    if (!req.auth) {
-      const url = new URL("/signin", req.nextUrl);
-      url.searchParams.set("callbackUrl", path + req.nextUrl.search);
-      return NextResponse.redirect(url);
-    }
-    return NextResponse.redirect(new URL("/forbidden", req.nextUrl));
+  if (!isProtected) return NextResponse.next();
+
+  if (!hasAuthCookie(req)) {
+    const url = req.nextUrl.clone();
+    url.pathname = "/signin";
+    url.searchParams.set("callbackUrl", req.nextUrl.href);
+    return NextResponse.redirect(url);
   }
-  return NextResponse.next();
-});
 
-export const config = { matcher: ["/courses/:path*", "/leader/:path*", "/admin/:path*"] };
+  return NextResponse.next();
+}
+
+// Limit where middleware runs to keep the bundle small and under the 1 MB Edge limit
+export const config = {
+  matcher: ["/admin/:path*", "/leader/:path*", "/courses/:path*"],
+};
