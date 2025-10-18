@@ -2,144 +2,246 @@
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { redirect } from "next/navigation";
-import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Role, Prisma } from "@prisma/client";
+import Link from "next/link";
 
-type Search = Promise<Record<string, string | string[] | undefined>>;
+type Role = "USER" | "LEADER" | "ADMIN";
+
+type SearchParams = {
+  q?: string;
+  role?: Role | "ALL";
+  page?: string;
+};
 
 export default async function AdminPage({
   searchParams,
 }: {
-  searchParams: Search;
+  searchParams?: Promise<SearchParams>;
 }) {
-  // Require auth
   const session = await auth();
-  if (!session?.user?.email) redirect("/signin");
-
-  // Only admins/leaders
-  const role = ((session.user ?? {}) as { role?: Role }).role ?? "USER";
-  if (role !== "ADMIN" && role !== "LEADER") redirect("/forbidden");
-
-  // Read search params safely
-  const sp = await searchParams;
-  const q = typeof sp["q"] === "string" ? sp["q"].trim() : "";
-  const pageStr = typeof sp["page"] === "string" ? sp["page"] : "1";
-  const page = Math.max(1, Number.parseInt(pageStr, 10) || 1);
-  const pageSize = 20;
-  const skip = (page - 1) * pageSize;
-
-  // Build Prisma where with correct enum handling
-  let where: Prisma.UserWhereInput | undefined = undefined;
-  if (q) {
-    const orParts: Prisma.UserWhereInput[] = [
-      { email: { contains: q, mode: "insensitive" } },
-      { name: { contains: q, mode: "insensitive" } },
-    ];
-
-    // Optional role match: allow searching "admin", "leader", "user"
-    const qLower = q.toLowerCase();
-    const roleGuess: Role | undefined =
-      qLower.startsWith("adm") ? "ADMIN" :
-      qLower.startsWith("lea") ? "LEADER" :
-      qLower.startsWith("use") ? "USER" : undefined;
-
-    if (roleGuess) orParts.push({ role: roleGuess });
-
-    where = { OR: orParts };
+  const me = session?.user;
+  const myRole: Role = ((me ?? {}) as { role?: Role }).role ?? "USER";
+  if (!me?.email || (myRole !== "ADMIN" && myRole !== "LEADER")) {
+    redirect("/forbidden");
   }
 
-  const [total, users] = await Promise.all([
-    prisma.user.count({ where }),
-    prisma.user.findMany({
-      where,
-      orderBy: { createdAt: "desc" },
-      skip,
-      take: pageSize,
-      select: { id: true, name: true, email: true, role: true, createdAt: true },
-    }),
-  ]);
+  const sp = (await searchParams) ?? {};
+  const q = (typeof sp.q === "string" ? sp.q : "").trim();
+  const roleFilter = (sp.role as Role | "ALL" | undefined) ?? "ALL";
+  const page = Number.parseInt(sp.page ?? "1", 10) || 1;
+  const take = 12;
+  const skip = (page - 1) * take;
 
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  // where clause (typed)
+  const where =
+    q || (roleFilter !== "ALL")
+      ? {
+          AND: [
+            roleFilter !== "ALL" ? { role: roleFilter } : {},
+            q
+              ? {
+                  OR: [
+                    { email: { contains: q, mode: "insensitive" } },
+                    { name: { contains: q, mode: "insensitive" } },
+                  ],
+                }
+              : {},
+          ],
+        }
+      : undefined;
+
+  const [total, users, adminCount, leaderCount, userCount, courseCount, requestCounts] =
+    await Promise.all([
+      prisma.user.count({ where }),
+      prisma.user.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        take,
+        skip,
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          role: true,
+          createdAt: true,
+          _count: { select: { enrollments: true } },
+        },
+      }),
+      prisma.user.count({ where: { role: "ADMIN" } }),
+      prisma.user.count({ where: { role: "LEADER" } }),
+      prisma.user.count({ where: { role: "USER" } }),
+      prisma.course.count(),
+      prisma.accessRequest.groupBy({
+        by: ["status"],
+        _count: { _all: true },
+      }),
+    ]);
+
+  const pages = Math.max(1, Math.ceil(total / take));
+  const pendingRequests =
+    requestCounts.find((r) => r.status === "PENDING")?._count._all ?? 0;
 
   return (
     <section className="space-y-6">
       <Card className="border border-border bg-card">
-        <CardHeader className="flex items-center justify-between">
-          <CardTitle>Users</CardTitle>
-          <div className="flex items-center gap-2">
-            <Link href="/admin/courses">
-              <Button variant="outline" size="sm">Courses</Button>
-            </Link>
+        <CardHeader>
+          <CardTitle>Admin Dashboard</CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <Stat label="Courses" value={courseCount} />
+          <Stat label="Admins" value={adminCount} />
+          <Stat label="Leaders" value={leaderCount} />
+          <Stat label="Users" value={userCount} />
+          <Stat label="Pending Requests" value={pendingRequests} href="/admin/requests" />
+        </CardContent>
+      </Card>
+
+      <Card className="border border-border bg-card">
+        <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <CardTitle>People</CardTitle>
+          <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+            <form className="flex w-full gap-2">
+              <Input
+                name="q"
+                placeholder="Search name or email…"
+                defaultValue={q}
+                className="sm:w-64"
+              />
+              <select
+                name="role"
+                defaultValue={roleFilter}
+                className="h-9 rounded-md border border-input bg-background px-2 text-sm"
+              >
+                <option value="ALL">All roles</option>
+                <option value="ADMIN">Admins</option>
+                <option value="LEADER">Leaders</option>
+                <option value="USER">Users</option>
+              </select>
+              <Button type="submit">Filter</Button>
+            </form>
             <Link href="/admin/enroll">
-              <Button variant="outline" size="sm">Enroll</Button>
+              <Button variant="outline">Enroll people</Button>
             </Link>
           </div>
         </CardHeader>
-        <CardContent className="space-y-4">
-          {/* Results header */}
-          <div className="flex items-center justify-between text-sm text-muted-foreground">
-            <div>
-              {total.toLocaleString()} user{total === 1 ? "" : "s"}
-              {q ? <> matching “{q}”</> : null}
-            </div>
-            <div>
-              Page {page} / {totalPages}
-            </div>
-          </div>
 
-          {/* Table-ish list */}
-          <div className="divide-y divide-border rounded-lg border border-border bg-background">
-            {users.map((u) => (
-              <div key={u.id} className="grid grid-cols-1 gap-2 p-3 sm:grid-cols-4 sm:items-center">
-                <div className="font-medium">{u.name ?? "—"}</div>
-                <div className="text-sm text-muted-foreground">{u.email}</div>
-                <div>
-                  <span className="rounded bg-muted px-2 py-0.5 text-xs">{u.role}</span>
-                </div>
-                <div className="sm:text-right">
-                  <Link href={`/admin/enroll?user=${encodeURIComponent(u.id)}`}>
-                    <Button size="sm" variant="outline">Manage</Button>
-                  </Link>
-                </div>
+        <CardContent className="grid gap-3">
+          {users.length === 0 ? (
+            <div className="rounded-lg border border-border bg-background p-4 text-sm text-muted-foreground">
+              No users match your filters.
+            </div>
+          ) : (
+            <ul className="divide-y divide-border rounded-lg border border-border bg-background">
+              {users.map((u) => (
+                <li
+                  key={u.id}
+                  className="grid grid-cols-1 gap-2 p-3 sm:grid-cols-[1fr_auto]"
+                >
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">{u.name ?? "Unnamed"}</span>
+                      <RoleBadge role={u.role} />
+                    </div>
+                    <div className="text-sm text-muted-foreground">{u.email}</div>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      Enrollments: {u._count.enrollments}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 justify-self-start sm:justify-self-end">
+                    <Link href={`/admin/enroll?user=${encodeURIComponent(u.email)}`}>
+                      <Button size="sm" variant="outline">
+                        Enroll
+                      </Button>
+                    </Link>
+                    <Link href={`/admin/courses`}>
+                      <Button size="sm" variant="ghost">
+                        Courses
+                      </Button>
+                    </Link>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {/* Pagination */}
+          {pages > 1 && (
+            <div className="flex items-center justify-between pt-2">
+              <span className="text-xs text-muted-foreground">
+                Page {page} of {pages} • {total} total
+              </span>
+              <div className="flex gap-2">
+                <PageLink disabled={page <= 1} href={makePageHref(q, roleFilter, page - 1)}>
+                  Previous
+                </PageLink>
+                <PageLink
+                  disabled={page >= pages}
+                  href={makePageHref(q, roleFilter, page + 1)}
+                >
+                  Next
+                </PageLink>
               </div>
-            ))}
-            {users.length === 0 && (
-              <div className="p-6 text-center text-sm text-muted-foreground">No users found.</div>
-            )}
-          </div>
-
-          {/* Pager */}
-          <div className="flex items-center justify-between">
-            <PagerButton disabled={page <= 1} href={`/admin?q=${encodeURIComponent(q)}&page=${page - 1}`}>
-              Previous
-            </PagerButton>
-            <PagerButton disabled={page >= totalPages} href={`/admin?q=${encodeURIComponent(q)}&page=${page + 1}`}>
-              Next
-            </PagerButton>
-          </div>
+            </div>
+          )}
         </CardContent>
       </Card>
     </section>
   );
 }
 
-function PagerButton({
-  disabled,
+function Stat({ label, value, href }: { label: string; value: number; href?: string }) {
+  const inner = (
+    <div className="rounded-lg border border-border bg-background p-4">
+      <div className="text-xs uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div className="mt-1 text-2xl font-bold">{value}</div>
+    </div>
+  );
+  return href ? <Link href={href}>{inner}</Link> : inner;
+}
+
+function RoleBadge({ role }: { role: Role }) {
+  const styles: Record<Role, string> = {
+    ADMIN: "bg-red-500/15 text-red-400",
+    LEADER: "bg-blue-500/15 text-blue-300",
+    USER: "bg-emerald-500/15 text-emerald-300",
+  };
+  return (
+    <span className={`rounded px-2 py-0.5 text-xs ${styles[role]}`}>{role}</span>
+  );
+}
+
+function makePageHref(q: string, role: Role | "ALL", page: number) {
+  const p = new URLSearchParams();
+  if (q) p.set("q", q);
+  if (role !== "ALL") p.set("role", role);
+  p.set("page", String(page));
+  return `/admin?${p.toString()}`;
+}
+
+function PageLink({
   href,
+  disabled,
   children,
 }: {
-  disabled?: boolean;
   href: string;
+  disabled?: boolean;
   children: React.ReactNode;
 }) {
   if (disabled) {
-    return <Button size="sm" variant="outline" disabled>{children}</Button>;
+    return (
+      <span className="rounded border border-border px-2 py-1 text-sm text-muted-foreground">
+        {children}
+      </span>
+    );
   }
   return (
-    <Link href={href}>
-      <Button size="sm" variant="outline">{children}</Button>
+    <Link
+      href={href}
+      className="rounded border border-border bg-background px-2 py-1 text-sm hover:bg-accent"
+    >
+      {children}
     </Link>
   );
 }
