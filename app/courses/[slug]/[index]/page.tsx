@@ -27,10 +27,9 @@ export default async function CourseSessionPage({
   });
   if (!me) redirect("/signin");
 
-  // parse week index
   const weekNumber = Math.max(parseInt(index, 10) || 1, 1);
 
-  // load course & session info
+  // Load course & this session (no 'content' selected)
   const course = await prisma.course.findUnique({
     where: { slug },
     select: {
@@ -39,34 +38,34 @@ export default async function CourseSessionPage({
       isPublished: true,
       sessions: {
         where: { index: weekNumber },
-        select: { id: true, index: true, title: true, content: true },
+        select: { id: true, index: true, title: true }, // <-- no 'content' here
       },
     },
   });
   if (!course) return notFound();
+
   const thisSession = course.sessions[0];
   if (!thisSession) return notFound();
 
-  // If you require enrollment for non-staff, ensure they have it
+  // Require enrollment for non-staff
   if (role !== "ADMIN" && role !== "LEADER") {
     const enrolled = await prisma.enrollment.findFirst({
       where: { userId: me.id, courseId: course.id, status: "ACTIVE" },
       select: { id: true },
     });
-    if (!enrolled) redirect("/courses"); // or show a nicer page
+    if (!enrolled) redirect("/courses");
   }
 
   // Progress stats + whether this week is already completed
   const [totalProgress, existing] = await Promise.all([
     prisma.progress.count({ where: { userId: me.id } }),
-    // IMPORTANT: use findFirst instead of composite findUnique
     prisma.progress.findFirst({
       where: { userId: me.id, weekNumber },
       select: { id: true },
     }),
   ]);
 
-  /* ---------------- Server Actions ---------------- */
+  /* ---------------- Server Action ---------------- */
 
   async function markComplete() {
     "use server";
@@ -78,7 +77,6 @@ export default async function CourseSessionPage({
     });
     if (!meNow) redirect("/signin");
 
-    // If a record for (userId, weekNumber) exists, do nothing; otherwise create one.
     const already = await prisma.progress.findFirst({
       where: { userId: meNow.id, weekNumber },
       select: { id: true },
@@ -102,9 +100,9 @@ export default async function CourseSessionPage({
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* Render your session content however you store it */}
-          <div className="prose prose-invert max-w-none">
-            {thisSession.content ?? "This session has no content yet."}
+          {/* You can replace this placeholder with real content fields later */}
+          <div className="rounded-lg border border-border bg-background p-4 text-sm text-muted-foreground">
+            Session content is not available yet.
           </div>
 
           <div className="flex items-center gap-3">
