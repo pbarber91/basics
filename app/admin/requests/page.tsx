@@ -1,9 +1,4 @@
 // app/admin/requests/page.tsx
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
-
-import type { ReactNode } from "react";
-import type { Prisma } from "@prisma/client";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { redirect } from "next/navigation";
@@ -14,48 +9,48 @@ import clsx from "clsx";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Separator } from "@/components/ui/separator";
+import type { Prisma } from "@prisma/client";
 
-type SearchParams = {
-  q?: string;
-  status?: string;
-  courseId?: string;
-};
+export const dynamic = "force-dynamic";
 
-type CourseLite = { id: string; title: string; slug: string };
+type Status = "PENDING" | "APPROVED" | "REJECTED";
+
+function asStatus(s: string): Status {
+  return s === "APPROVED" || s === "REJECTED" ? s : "PENDING";
+}
 
 type RequestRow = {
   id: string;
   name: string | null;
   email: string;
   message: string | null;
-  status: "PENDING" | "APPROVED" | "REJECTED";
+  status: Status;
   createdAt: Date;
-  course: CourseLite;
+  course: { id: string; title: string; slug: string };
 };
 
 export default async function AccessRequestsPage({
   searchParams,
 }: {
-  searchParams: Promise<SearchParams>;
+  searchParams: Promise<{ q?: string; status?: string; courseId?: string }>;
 }) {
   const { q = "", status = "PENDING", courseId = "" } = await searchParams;
 
   const session = await auth();
   if (!session?.user?.email) redirect("/signin");
-  const role = (session.user as any).role ?? "USER";
+  const role = (session.user as Record<string, unknown>)["role"] ?? "USER";
   if (role !== "ADMIN" && role !== "LEADER") redirect("/forbidden");
 
   // Course filter dropdown
-  const courses: CourseLite[] = await prisma.course.findMany({
+  const courses = await prisma.course.findMany({
     orderBy: { title: "asc" },
     select: { id: true, title: true, slug: true },
   });
 
-  // WHERE for requests (typed)
+  // Build WHERE for requests with Prisma types
   const where: Prisma.AccessRequestWhereInput = {};
   if (courseId) where.courseId = courseId;
-  if (status && status !== "ALL") where.status = status as RequestRow["status"];
+  if (status && status !== "ALL") where.status = status;
   if (q) {
     where.OR = [
       { email: { contains: q } },
@@ -64,7 +59,7 @@ export default async function AccessRequestsPage({
     ];
   }
 
-  const requests: RequestRow[] = await prisma.accessRequest.findMany({
+  const raw = await prisma.accessRequest.findMany({
     where,
     orderBy: { createdAt: "desc" },
     select: {
@@ -72,19 +67,25 @@ export default async function AccessRequestsPage({
       name: true,
       email: true,
       message: true,
-      status: true,
+      status: true, // Prisma types this as string
       createdAt: true,
       course: { select: { id: true, title: true, slug: true } },
     },
-    take: 200,
+    take: 200, // safety cap
   });
+
+  // Narrow status to our union type
+  const requests: RequestRow[] = raw.map((r) => ({
+    ...r,
+    status: asStatus(r.status),
+  }));
 
   /* --------------- Server Actions --------------- */
 
   async function approve(formData: FormData) {
     "use server";
     const s = await auth();
-    const r = (s?.user as any)?.role ?? "USER";
+    const r = (s?.user as Record<string, unknown>)["role"] ?? "USER";
     if (r !== "ADMIN" && r !== "LEADER") redirect("/forbidden");
 
     const id = String(formData.get("id") || "");
@@ -101,7 +102,7 @@ export default async function AccessRequestsPage({
   async function approveAndEnroll(formData: FormData) {
     "use server";
     const s = await auth();
-    const r = (s?.user as any)?.role ?? "USER";
+    const r = (s?.user as Record<string, unknown>)["role"] ?? "USER";
     if (r !== "ADMIN" && r !== "LEADER") redirect("/forbidden");
 
     const id = String(formData.get("id") || "");
@@ -135,7 +136,7 @@ export default async function AccessRequestsPage({
   async function reject(formData: FormData) {
     "use server";
     const s = await auth();
-    const r = (s?.user as any)?.role ?? "USER";
+    const r = (s?.user as Record<string, unknown>)["role"] ?? "USER";
     if (r !== "ADMIN" && r !== "LEADER") redirect("/forbidden");
 
     const id = String(formData.get("id") || "");
@@ -152,7 +153,7 @@ export default async function AccessRequestsPage({
   async function remove(formData: FormData) {
     "use server";
     const s = await auth();
-    const r = (s?.user as any)?.role ?? "USER";
+    const r = (s?.user as Record<string, unknown>)["role"] ?? "USER";
     if (r !== "ADMIN" && r !== "LEADER") redirect("/forbidden");
 
     const id = String(formData.get("id") || "");
@@ -201,7 +202,7 @@ export default async function AccessRequestsPage({
                 className="w-full rounded-md border border-border bg-background p-2 text-sm"
               >
                 <option value="">All courses</option>
-                {courses.map((c: CourseLite) => (
+                {courses.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.title}
                   </option>
@@ -260,28 +261,22 @@ export default async function AccessRequestsPage({
                 </tr>
               </thead>
               <tbody>
-                {requests.map((r: RequestRow) => (
+                {requests.map((r) => (
                   <tr key={r.id} className="border-b border-border last:border-0">
                     <Td>{formatDateTime(r.createdAt)}</Td>
                     <Td>{r.course.title}</Td>
                     <Td>{r.name}</Td>
                     <Td className="font-medium">{r.email}</Td>
-                    <Td
-                      className="max-w-[28ch] truncate"
-                      title={r.message ?? ""}
-                    >
+                    <Td className="max-w-[28ch] truncate" title={r.message ?? ""}>
                       {r.message ?? "—"}
                     </Td>
                     <Td>
                       <span
                         className={clsx(
                           "rounded-full px-2 py-0.5 text-xs",
-                          r.status === "PENDING" &&
-                            "border border-amber-500/30 bg-amber-500/10 text-amber-300",
-                          r.status === "APPROVED" &&
-                            "border border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
-                          r.status === "REJECTED" &&
-                            "border border-rose-500/30 bg-rose-500/10 text-rose-300"
+                          r.status === "PENDING" && "border border-amber-500/30 bg-amber-500/10 text-amber-300",
+                          r.status === "APPROVED" && "border border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
+                          r.status === "REJECTED" && "border border-rose-500/30 bg-rose-500/10 text-rose-300"
                         )}
                       >
                         {r.status}
@@ -335,10 +330,10 @@ export default async function AccessRequestsPage({
 function Th({
   children,
   className,
-  ...props
-}: React.ComponentPropsWithoutRef<"th"> & { children: ReactNode }) {
+  ...rest
+}: React.ThHTMLAttributes<HTMLTableCellElement> & { children: React.ReactNode }) {
   return (
-    <th {...props} className={clsx("px-3 py-2", className)}>
+    <th className={clsx("px-3 py-2", className)} {...rest}>
       {children}
     </th>
   );
@@ -347,16 +342,16 @@ function Th({
 function Td({
   children,
   className,
-  ...props
-}: React.ComponentPropsWithoutRef<"td"> & { children: ReactNode }) {
+  ...rest
+}: React.TdHTMLAttributes<HTMLTableCellElement> & { children: React.ReactNode }) {
   return (
-    <td {...props} className={clsx("px-3 py-2 align-middle", className)}>
+    <td className={clsx("px-3 py-2 align-middle", className)} {...rest}>
       {children}
     </td>
   );
 }
 
-function formatDateTime(d: Date | string | number) {
+function formatDateTime(d: Date) {
   try {
     return new Intl.DateTimeFormat("en-US", {
       dateStyle: "medium",
