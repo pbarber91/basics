@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
+import { Prisma } from "@prisma/client";
 
 type Role = "USER" | "LEADER" | "ADMIN";
 
@@ -34,23 +35,26 @@ export default async function AdminPage({
   const take = 12;
   const skip = (page - 1) * take;
 
-  // where clause (typed)
-  const where =
-    q || (roleFilter !== "ALL")
-      ? {
-          AND: [
-            roleFilter !== "ALL" ? { role: roleFilter } : {},
-            q
-              ? {
-                  OR: [
-                    { email: { contains: q, mode: "insensitive" } },
-                    { name: { contains: q, mode: "insensitive" } },
-                  ],
-                }
-              : {},
-          ],
-        }
-      : undefined;
+  // ----- Prisma-safe where clause (explicit literal types for mode, proper AND/OR typing)
+  let where: Prisma.UserWhereInput | undefined;
+  {
+    const conditions: Prisma.UserWhereInput[] = [];
+
+    if (roleFilter !== "ALL") {
+      conditions.push({ role: roleFilter });
+    }
+
+    if (q) {
+      const orParts: Prisma.UserWhereInput[] = [
+        { email: { contains: q, mode: "insensitive" as const } },
+        { name: { contains: q, mode: "insensitive" as const } },
+      ];
+      conditions.push({ OR: orParts });
+    }
+
+    where = conditions.length ? { AND: conditions } : undefined;
+  }
+  // -----
 
   const [total, users, adminCount, leaderCount, userCount, courseCount, requestCounts] =
     await Promise.all([
@@ -94,7 +98,11 @@ export default async function AdminPage({
           <Stat label="Admins" value={adminCount} />
           <Stat label="Leaders" value={leaderCount} />
           <Stat label="Users" value={userCount} />
-          <Stat label="Pending Requests" value={pendingRequests} href="/admin/requests" />
+          <Stat
+            label="Pending Requests"
+            value={pendingRequests}
+            href="/admin/requests"
+          />
         </CardContent>
       </Card>
 
@@ -142,7 +150,7 @@ export default async function AdminPage({
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="font-medium">{u.name ?? "Unnamed"}</span>
-                      <RoleBadge role={u.role} />
+                      <RoleBadge role={u.role as Role} />
                     </div>
                     <div className="text-sm text-muted-foreground">{u.email}</div>
                     <div className="mt-1 text-xs text-muted-foreground">
@@ -173,7 +181,10 @@ export default async function AdminPage({
                 Page {page} of {pages} • {total} total
               </span>
               <div className="flex gap-2">
-                <PageLink disabled={page <= 1} href={makePageHref(q, roleFilter, page - 1)}>
+                <PageLink
+                  disabled={page <= 1}
+                  href={makePageHref(q, roleFilter, page - 1)}
+                >
                   Previous
                 </PageLink>
                 <PageLink
