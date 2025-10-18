@@ -28,19 +28,25 @@ export default async function AdminCoursesPage() {
     },
   });
 
-  // ===== compute completion across all users WITHOUT assuming courseId in Progress
+  // ===== compute completion across all users WITHOUT assuming courseId exists on SessionWhereInput
   const courseIds = courses.map((c) => c.id);
   let completedByCourse: Record<string, number> = {};
+
   if (courseIds.length) {
+    // Filter sessions by the relation (course.id IN ...), not by a raw courseId field
     const sessions = await prisma.session.findMany({
-      where: { courseId: { in: courseIds } },
-      select: { id: true, courseId: true },
+      where: { course: { id: { in: courseIds } } },
+      select: {
+        id: true,
+        course: { select: { id: true } }, // read course id via relation
+      },
     });
 
     const sessionToCourse = new Map<string, string>();
     const allSessionIds: string[] = [];
     for (const s of sessions) {
-      sessionToCourse.set(s.id, s.courseId);
+      const cid = s.course.id;
+      sessionToCourse.set(s.id, cid);
       allSessionIds.push(s.id);
     }
 
@@ -50,7 +56,7 @@ export default async function AdminCoursesPage() {
         select: { sessionId: true },
       });
 
-      // Count rows per course
+      // Count progress rows per course
       const tally: Record<string, number> = {};
       for (const p of allProgress) {
         const cid = sessionToCourse.get(p.sessionId);
