@@ -2,362 +2,186 @@
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { redirect } from "next/navigation";
-import { revalidatePath } from "next/cache";
 import Link from "next/link";
-import clsx from "clsx";
-
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import type { Prisma } from "@prisma/client";
+import type { Prisma, AccessRequestStatus, Role } from "@prisma/client";
 
-export const dynamic = "force-dynamic";
-
-type Status = "PENDING" | "APPROVED" | "REJECTED";
-
-function asStatus(s: string): Status {
-  return s === "APPROVED" || s === "REJECTED" ? s : "PENDING";
-}
+type Search = Promise<Record<string, string | string[] | undefined>>;
 
 type RequestRow = {
   id: string;
   name: string | null;
   email: string;
-  message: string | null;
-  status: Status;
   createdAt: Date;
+  status: AccessRequestStatus;
+  message: string | null;
   course: { id: string; title: string; slug: string };
 };
 
-export default async function AccessRequestsPage({
+function parseStatus(input?: string | null): AccessRequestStatus | "ALL" | undefined {
+  if (!input) return undefined;
+  const s = input.toUpperCase();
+  if (s === "ALL") return "ALL";
+  if (s === "PENDING" || s === "APPROVED" || s === "REJECTED") return s as AccessRequestStatus;
+  return undefined;
+}
+
+export default async function AdminRequestsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string; status?: string; courseId?: string }>;
+  searchParams: Search;
 }) {
-  const { q = "", status = "PENDING", courseId = "" } = await searchParams;
-
+  // Auth & role gate
   const session = await auth();
   if (!session?.user?.email) redirect("/signin");
-  const role = (session.user as Record<string, unknown>)["role"] ?? "USER";
+  const role = ((session.user ?? {}) as { role?: Role }).role ?? "USER";
   if (role !== "ADMIN" && role !== "LEADER") redirect("/forbidden");
 
-  // Course filter dropdown
-  const courses = await prisma.course.findMany({
-    orderBy: { title: "asc" },
-    select: { id: true, title: true, slug: true },
-  });
+  // Read query params safely
+  const sp = await searchParams;
+  const q = typeof sp["q"] === "string" ? sp["q"].trim() : "";
+  const courseId = typeof sp["courseId"] === "string" ? sp["courseId"] : undefined;
+  const statusParam = typeof sp["status"] === "string" ? sp["status"] : undefined;
+  const statusParsed = parseStatus(statusParam);
+  const pageStr = typeof sp["page"] === "string" ? sp["page"] : "1";
+  const page = Math.max(1, Number.parseInt(pageStr, 10) || 1);
+  const pageSize = 20;
+  const skip = (page - 1) * pageSize;
 
-  // Build WHERE for requests with Prisma types
+  // Build Prisma where with the correct enum type
   const where: Prisma.AccessRequestWhereInput = {};
   if (courseId) where.courseId = courseId;
-  if (status && status !== "ALL") where.status = status;
+  if (statusParsed && statusParsed !== "ALL") where.status = statusParsed;
   if (q) {
     where.OR = [
-      { email: { contains: q } },
-      { name: { contains: q } },
-      { message: { contains: q } },
+      { email: { contains: q, mode: "insensitive" } },
+      { name: { contains: q, mode: "insensitive" } },
+      { course: { title: { contains: q, mode: "insensitive" } } },
     ];
   }
 
-  const raw = await prisma.accessRequest.findMany({
-    where,
-    orderBy: { createdAt: "desc" },
-    select: {
-      id: true,
-      name: true,
-      email: true,
-      message: true,
-      status: true, // Prisma types this as string
-      createdAt: true,
-      course: { select: { id: true, title: true, slug: true } },
-    },
-    take: 200, // safety cap
-  });
+  const [total, requests] = await Promise.all([
+    prisma.accessRequest.count({ where }),
+    prisma.accessRequest.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      skip,
+      take: pageSize,
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        createdAt: true,
+        status: true, // <- enum type AccessRequestStatus
+        message: true,
+        course: { select: { id: true, title: true, slug: true } },
+      },
+    }),
+  ]);
 
-  // Narrow status to our union type
-  const requests: RequestRow[] = raw.map((r) => ({
-    ...r,
-    status: asStatus(r.status),
-  }));
-
-  /* --------------- Server Actions --------------- */
-
-  async function approve(formData: FormData) {
-    "use server";
-    const s = await auth();
-    const r = (s?.user as Record<string, unknown>)["role"] ?? "USER";
-    if (r !== "ADMIN" && r !== "LEADER") redirect("/forbidden");
-
-    const id = String(formData.get("id") || "");
-    if (!id) return;
-
-    await prisma.accessRequest.update({
-      where: { id },
-      data: { status: "APPROVED" },
-    });
-
-    revalidatePath("/admin/requests");
-  }
-
-  async function approveAndEnroll(formData: FormData) {
-    "use server";
-    const s = await auth();
-    const r = (s?.user as Record<string, unknown>)["role"] ?? "USER";
-    if (r !== "ADMIN" && r !== "LEADER") redirect("/forbidden");
-
-    const id = String(formData.get("id") || "");
-    const email = String(formData.get("email") || "").toLowerCase();
-    const courseIdVal = String(formData.get("courseId") || "");
-    if (!id || !email || !courseIdVal) return;
-
-    // Mark approved
-    await prisma.accessRequest.update({
-      where: { id },
-      data: { status: "APPROVED" },
-    });
-
-    // If a user exists with that email, enroll them (ACTIVE)
-    const user = await prisma.user.findUnique({
-      where: { email },
-      select: { id: true },
-    });
-
-    if (user) {
-      await prisma.enrollment.upsert({
-        where: { userId_courseId: { userId: user.id, courseId: courseIdVal } },
-        update: { status: "ACTIVE" },
-        create: { userId: user.id, courseId: courseIdVal, status: "ACTIVE" },
-      });
-    }
-
-    revalidatePath("/admin/requests");
-  }
-
-  async function reject(formData: FormData) {
-    "use server";
-    const s = await auth();
-    const r = (s?.user as Record<string, unknown>)["role"] ?? "USER";
-    if (r !== "ADMIN" && r !== "LEADER") redirect("/forbidden");
-
-    const id = String(formData.get("id") || "");
-    if (!id) return;
-
-    await prisma.accessRequest.update({
-      where: { id },
-      data: { status: "REJECTED" },
-    });
-
-    revalidatePath("/admin/requests");
-  }
-
-  async function remove(formData: FormData) {
-    "use server";
-    const s = await auth();
-    const r = (s?.user as Record<string, unknown>)["role"] ?? "USER";
-    if (r !== "ADMIN" && r !== "LEADER") redirect("/forbidden");
-
-    const id = String(formData.get("id") || "");
-    if (!id) return;
-
-    await prisma.accessRequest.delete({ where: { id } });
-    revalidatePath("/admin/requests");
-  }
-
-  /* ---------------------- UI ---------------------- */
+  const rows: RequestRow[] = requests; // matches the select shape
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   return (
     <section className="space-y-6">
-      {/* Header / nav */}
       <Card className="border border-border bg-card">
-        <CardContent className="flex items-end justify-between gap-4 p-6">
-          <div>
-            <h1 className="text-2xl font-bold">Access Requests</h1>
-            <p className="text-sm text-muted-foreground">
-              Review course access requests, approve, approve + auto-enroll (if user exists), reject, or delete.
-            </p>
-          </div>
-          <div className="flex gap-2">
+        <CardHeader className="flex items-center justify-between">
+          <CardTitle>Access Requests</CardTitle>
+          <div className="flex items-center gap-2">
             <Link href="/admin">
-              <Button variant="outline">Admin Home</Button>
+              <Button variant="outline" size="sm">Users</Button>
             </Link>
-            <Link href="/admin/enroll">
-              <Button variant="outline">Enroll Users</Button>
+            <Link href="/admin/courses">
+              <Button variant="outline" size="sm">Courses</Button>
             </Link>
           </div>
-        </CardContent>
-      </Card>
-
-      {/* Filters */}
-      <Card className="border border-border bg-card">
-        <CardHeader>
-          <CardTitle>Filter</CardTitle>
         </CardHeader>
-        <CardContent>
-          <form method="GET" className="grid gap-3 sm:grid-cols-4">
+
+        <CardContent className="space-y-4">
+          {/* Summary */}
+          <div className="flex items-center justify-between text-sm text-muted-foreground">
             <div>
-              <label className="mb-1 block text-sm text-muted-foreground">Course</label>
-              <select
-                name="courseId"
-                defaultValue={courseId}
-                className="w-full rounded-md border border-border bg-background p-2 text-sm"
-              >
-                <option value="">All courses</option>
-                {courses.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.title}
-                  </option>
-                ))}
-              </select>
+              {total.toLocaleString()} request{total === 1 ? "" : "s"}
+              {statusParsed && statusParsed !== "ALL" ? <> • {statusParsed}</> : null}
+              {courseId ? <> • course:{courseId.slice(0, 8)}…</> : null}
+              {q ? <> • “{q}”</> : null}
             </div>
-
-            <div>
-              <label className="mb-1 block text-sm text-muted-foreground">Status</label>
-              <select
-                name="status"
-                defaultValue={status}
-                className="w-full rounded-md border border-border bg-background p-2 text-sm"
-              >
-                <option value="ALL">All</option>
-                <option value="PENDING">Pending</option>
-                <option value="APPROVED">Approved</option>
-                <option value="REJECTED">Rejected</option>
-              </select>
-            </div>
-
-            <div className="sm:col-span-2">
-              <label className="mb-1 block text-sm text-muted-foreground">Search</label>
-              <Input name="q" placeholder="name, email, message…" defaultValue={q} />
-            </div>
-
-            <div className="sm:col-span-4 flex justify-end">
-              <Button type="submit">Apply Filters</Button>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
-
-      {/* Requests table */}
-      <Card className="border border-border bg-card">
-        <CardHeader>
-          <CardTitle>
-            Results{" "}
-            <span className="ml-2 rounded-full border border-border bg-background px-2 py-0.5 text-xs text-muted-foreground">
-              {requests.length}
-            </span>
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-left text-sm">
-              <thead className="border-b border-border bg-muted text-muted-foreground">
-                <tr>
-                  <Th>When</Th>
-                  <Th>Course</Th>
-                  <Th>Name</Th>
-                  <Th>Email</Th>
-                  <Th>Message</Th>
-                  <Th>Status</Th>
-                  <Th className="text-right">Actions</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {requests.map((r) => (
-                  <tr key={r.id} className="border-b border-border last:border-0">
-                    <Td>{formatDateTime(r.createdAt)}</Td>
-                    <Td>{r.course.title}</Td>
-                    <Td>{r.name}</Td>
-                    <Td className="font-medium">{r.email}</Td>
-                    <Td className="max-w-[28ch] truncate" title={r.message ?? ""}>
-                      {r.message ?? "—"}
-                    </Td>
-                    <Td>
-                      <span
-                        className={clsx(
-                          "rounded-full px-2 py-0.5 text-xs",
-                          r.status === "PENDING" && "border border-amber-500/30 bg-amber-500/10 text-amber-300",
-                          r.status === "APPROVED" && "border border-emerald-500/30 bg-emerald-500/10 text-emerald-300",
-                          r.status === "REJECTED" && "border border-rose-500/30 bg-rose-500/10 text-rose-300"
-                        )}
-                      >
-                        {r.status}
-                      </span>
-                    </Td>
-                    <Td className="text-right">
-                      {/* Single form with multiple actions via formAction */}
-                      <form className="inline-flex gap-2">
-                        <input type="hidden" name="id" value={r.id} />
-                        <input type="hidden" name="email" value={r.email} />
-                        <input type="hidden" name="courseId" value={r.course.id} />
-
-                        <Button type="submit" size="sm" variant="outline" formAction={approve}>
-                          Approve
-                        </Button>
-                        <Button type="submit" size="sm" formAction={approveAndEnroll}>
-                          Approve + Enroll
-                        </Button>
-                        <Button
-                          type="submit"
-                          size="sm"
-                          variant="secondary"
-                          className="border-border"
-                          formAction={reject}
-                        >
-                          Reject
-                        </Button>
-                        <Button type="submit" size="sm" variant="destructive" formAction={remove}>
-                          Delete
-                        </Button>
-                      </form>
-                    </Td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div>Page {page} / {totalPages}</div>
           </div>
 
-          {requests.length === 0 && (
-            <div className="mt-4 rounded-xl border border-border bg-background p-6 text-center text-sm text-muted-foreground">
-              No requests match your filters.
-            </div>
-          )}
+          {/* List */}
+          <div className="divide-y divide-border rounded-lg border border-border bg-background">
+            {rows.map((r) => (
+              <div key={r.id} className="grid grid-cols-1 gap-2 p-3 sm:grid-cols-5 sm:items-center">
+                <div className="sm:col-span-2">
+                  <div className="font-medium">{r.name ?? "—"}</div>
+                  <div className="text-sm text-muted-foreground">{r.email}</div>
+                </div>
+                <div className="text-sm">
+                  <Link className="underline" href={`/courses/${r.course.slug}`}>{r.course.title}</Link>
+                </div>
+                <div>
+                  <span className="rounded bg-muted px-2 py-0.5 text-xs">{r.status}</span>
+                </div>
+                <div className="text-sm text-muted-foreground truncate" title={r.message ?? ""}>
+                  {r.message ?? "—"}
+                </div>
+              </div>
+            ))}
+            {rows.length === 0 && (
+              <div className="p-6 text-center text-sm text-muted-foreground">
+                No access requests found.
+              </div>
+            )}
+          </div>
+
+          {/* Pager */}
+          <div className="flex items-center justify-between">
+            <PagerButton
+              disabled={page <= 1}
+              href={`/admin/requests?${new URLSearchParams({
+                q,
+                page: String(page - 1),
+                courseId: courseId ?? "",
+                status: statusParam ?? "",
+              }).toString()}`}
+            >
+              Previous
+            </PagerButton>
+            <PagerButton
+              disabled={page >= totalPages}
+              href={`/admin/requests?${new URLSearchParams({
+                q,
+                page: String(page + 1),
+                courseId: courseId ?? "",
+                status: statusParam ?? "",
+              }).toString()}`}
+            >
+              Next
+            </PagerButton>
+          </div>
         </CardContent>
       </Card>
     </section>
   );
 }
 
-/* --------- tiny helpers --------- */
-function Th({
+function PagerButton({
+  disabled,
+  href,
   children,
-  className,
-  ...rest
-}: React.ThHTMLAttributes<HTMLTableCellElement> & { children: React.ReactNode }) {
-  return (
-    <th className={clsx("px-3 py-2", className)} {...rest}>
-      {children}
-    </th>
-  );
-}
-
-function Td({
-  children,
-  className,
-  ...rest
-}: React.TdHTMLAttributes<HTMLTableCellElement> & { children: React.ReactNode }) {
-  return (
-    <td className={clsx("px-3 py-2 align-middle", className)} {...rest}>
-      {children}
-    </td>
-  );
-}
-
-function formatDateTime(d: Date) {
-  try {
-    return new Intl.DateTimeFormat("en-US", {
-      dateStyle: "medium",
-      timeStyle: "short",
-    }).format(new Date(d));
-  } catch {
-    return String(d);
+}: {
+  disabled?: boolean;
+  href: string;
+  children: React.ReactNode;
+}) {
+  if (disabled) {
+    return <Button size="sm" variant="outline" disabled>{children}</Button>;
   }
+  return (
+    <Link href={href}>
+      <Button size="sm" variant="outline">{children}</Button>
+    </Link>
+  );
 }
