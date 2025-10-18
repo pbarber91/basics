@@ -1,100 +1,55 @@
 // prisma/schema.prisma
-datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
-}
-
 generator client {
   provider = "prisma-client-js"
 }
 
-/* -------------------- App models -------------------- */
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL") // ← Supabase Postgres URL
+}
+
+enum Role {
+  USER
+  LEADER
+  ADMIN
+}
+
+enum EnrollmentStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum AccessRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/* ---------- Auth.js (Prisma Adapter) standard models ---------- */
 
 model User {
-  id         String   @id @default(uuid()) @db.Uuid
-  email      String   @unique
-  password   String?
-  name       String?
-  role       String   @default("USER")
-  createdAt  DateTime @default(now())
+  id             String    @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
+  name           String?
+  email          String?   @unique
+  emailVerified  DateTime?
+  image          String?
+  password       String?
+  role           Role      @default(USER)
 
-  // Relations
-  accounts     Account[]
-  sessions     Session[]
-  enrollments  Enrollment[]
-  progresses   Progress[]
+  accounts       Account[]
+  sessions       Session[]
+
+  // App relations
+  progresses     Progress[]
+  enrollments    Enrollment[]
+  accessRequests AccessRequest[]
+
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 }
-
-model Course {
-  id          String   @id @default(uuid()) @db.Uuid
-  slug        String   @unique
-  title       String
-  summary     String?
-  thumbnail   String?
-  isPublished Boolean  @default(false)
-  createdAt   DateTime @default(now())
-
-  // Relations (opposites added to fix your error)
-  sessions        CourseSession[]
-  enrollments     Enrollment[]
-  progresses      Progress[]        // <— opposite side of Progress.course
-  accessRequests  AccessRequest[]   // <— opposite side of AccessRequest.course
-}
-
-model CourseSession {
-  id       String @id @default(uuid()) @db.Uuid
-  courseId String @db.Uuid
-  index    Int
-  title    String
-  content  String?
-
-  course   Course @relation(fields: [courseId], references: [id])
-
-  @@unique([courseId, index])
-}
-
-model Enrollment {
-  id       String @id @default(uuid()) @db.Uuid
-  userId   String @db.Uuid
-  courseId String @db.Uuid
-  status   String @default("ACTIVE")
-
-  user   User   @relation(fields: [userId], references: [id])
-  course Course @relation(fields: [courseId], references: [id])
-
-  @@unique([userId, courseId])
-}
-
-model Progress {
-  id         String   @id @default(uuid()) @db.Uuid
-  userId     String   @db.Uuid
-  courseId   String   @db.Uuid
-  weekNumber Int
-  data       Json?
-  createdAt  DateTime @default(now())
-
-  user   User   @relation(fields: [userId], references: [id])
-  course Course @relation(fields: [courseId], references: [id])
-
-  @@unique([userId, weekNumber])
-}
-
-model AccessRequest {
-  id        String   @id @default(uuid()) @db.Uuid
-  courseId  String   @db.Uuid
-  name      String
-  email     String
-  message   String?
-  status    String   @default("PENDING")
-  createdAt DateTime @default(now())
-
-  course Course @relation(fields: [courseId], references: [id])
-}
-
-/* -------------------- Auth.js adapter models -------------------- */
 
 model Account {
-  id                String  @id @default(uuid()) @db.Uuid
+  id                String  @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
   userId            String  @db.Uuid
   type              String
   provider          String
@@ -107,18 +62,18 @@ model Account {
   id_token          String?
   session_state     String?
 
-  user User @relation(fields: [userId], references: [id])
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([provider, providerAccountId])
 }
 
 model Session {
-  id           String   @id @default(uuid()) @db.Uuid
+  id           String   @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
   sessionToken String   @unique
   userId       String   @db.Uuid
   expires      DateTime
 
-  user User @relation(fields: [userId], references: [id])
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model VerificationToken {
@@ -127,4 +82,83 @@ model VerificationToken {
   expires    DateTime
 
   @@unique([identifier, token])
+}
+
+/* ---------------------- App models ---------------------- */
+
+model Course {
+  id            String           @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
+  title         String
+  slug          String           @unique
+  summary       String?
+  thumbnail     String?
+  isPublished   Boolean          @default(false)
+
+  // Relations
+  sessions      CourseSession[]
+  enrollments   Enrollment[]
+  accessRequests AccessRequest[]
+
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+}
+
+model CourseSession {
+  id             String    @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
+  courseId       String    @db.Uuid
+  index          Int
+  title          String
+  videoUrl       String?
+  captionsVttUrl String?
+  transcript     String?
+
+  course         Course    @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  progresses     Progress[]
+
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([courseId, index])
+}
+
+model Enrollment {
+  id        String           @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
+  userId    String           @db.Uuid
+  courseId  String           @db.Uuid
+  status    EnrollmentStatus @default(ACTIVE)
+
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course    Course           @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  @@unique([userId, courseId])
+}
+
+model Progress {
+  id               String         @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
+  userId           String         @db.Uuid
+  courseSessionId  String         @db.Uuid
+
+  user             User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  courseSession    CourseSession  @relation(fields: [courseSessionId], references: [id], onDelete: Cascade)
+
+  createdAt        DateTime       @default(now())
+
+  @@unique([userId, courseSessionId])
+}
+
+model AccessRequest {
+  id        String               @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
+  courseId  String               @db.Uuid
+  name      String
+  email     String
+  message   String?
+  status    AccessRequestStatus  @default(PENDING)
+  createdAt DateTime             @default(now())
+
+  course    Course               @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@index([email])
 }
