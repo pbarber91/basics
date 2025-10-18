@@ -1,60 +1,106 @@
 // prisma/schema.prisma
-
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  directUrl = env("DIRECT_URL")
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 generator client {
   provider = "prisma-client-js"
 }
 
-/**
- * ----------------- Auth / Users -----------------
- */
+/** Example models — adjust to your full schema **/
 model User {
-  id        String   @id @default(cuid())
-  name      String?
-  email     String   @unique
-  password  String
-  role      String   @default("USER") // USER | LEADER | ADMIN (kept as String for SQLite)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id         String   @id @default(uuid()) @db.Uuid
+  email      String   @unique
+  password   String?
+  name       String?
+  role       String   @default("USER")
+  createdAt  DateTime @default(now())
 
-  accounts Account[]
-  sessions Session[]
-
+  accounts   Account[]
+  sessions   Session[]
   enrollments Enrollment[]
   progresses  Progress[]
 }
 
-model Account {
-  id     String @id @default(cuid())
-  userId String
-  user   User   @relation(fields: [userId], references: [id])
+model Course {
+  id          String   @id @default(uuid()) @db.Uuid
+  slug        String   @unique
+  title       String
+  summary     String?
+  thumbnail   String?
+  isPublished Boolean   @default(false)
+  createdAt   DateTime  @default(now())
 
+  sessions    CourseSession[]
+  enrollments Enrollment[]
+}
+
+model CourseSession {
+  id        String  @id @default(uuid()) @db.Uuid
+  courseId  String  @db.Uuid
+  index     Int
+  title     String
+  content   String?
+
+  course    Course  @relation(fields: [courseId], references: [id])
+
+  @@unique([courseId, index])
+}
+
+model Enrollment {
+  id        String  @id @default(uuid()) @db.Uuid
+  userId    String  @db.Uuid
+  courseId  String  @db.Uuid
+  status    String  @default("ACTIVE")
+
+  user      User    @relation(fields: [userId], references: [id])
+  course    Course  @relation(fields: [courseId], references: [id])
+
+  @@unique([userId, courseId])
+}
+
+model Progress {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @db.Uuid
+  courseId   String   @db.Uuid
+  weekNumber Int
+  data       Json?
+  createdAt  DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id])
+  course Course @relation(fields: [courseId], references: [id])
+
+  @@unique([userId, weekNumber])
+}
+
+/** Auth.js adapter models **/
+model Account {
+  id                String  @id @default(uuid()) @db.Uuid
+  userId            String  @db.Uuid
   type              String
   provider          String
   providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
 
-  refresh_token String?
-  access_token  String?
-  expires_at    Int?
-  token_type    String?
-  scope         String?
-  id_token      String?
-  session_state String?
+  user User @relation(fields: [userId], references: [id])
 
   @@unique([provider, providerAccountId])
 }
 
 model Session {
-  id           String   @id @default(cuid())
+  id           String   @id @default(uuid()) @db.Uuid
   sessionToken String   @unique
-  userId       String
-  user         User     @relation(fields: [userId], references: [id])
+  userId       String   @db.Uuid
   expires      DateTime
+
+  user User @relation(fields: [userId], references: [id])
 }
 
 model VerificationToken {
@@ -65,94 +111,14 @@ model VerificationToken {
   @@unique([identifier, token])
 }
 
-/**
- * ----------------- Courses -----------------
- */
-model Course {
-  id          String   @id @default(cuid())
-  slug        String   @unique
-  title       String
-  summary     String
-  thumbnail   String?
-  isPublished Boolean  @default(true)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  sessions       CourseSession[]
-  enrollments    Enrollment[]
-  accessRequests AccessRequest[]
-
-  @@index([slug])
-}
-
-model CourseSession {
-  id       String @id @default(cuid())
-  courseId String
-  course   Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
-
-  index          Int // 1..N order within the course
-  title          String
-  summary        String
-  videoUrl       String
-  captionsVttUrl String?
-  transcript     String?
-  guideOnlineUrl String
-  guidePdfUrl    String
-  thumbnail      String?
-
-  resources  Resource[]
-  progresses Progress[]
-
-  @@unique([courseId, index]) // allows upsert via where: { courseId_index: { ... } }
-}
-
-model Resource {
-  id         String        @id @default(cuid())
-  sessionId  String
-  session    CourseSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  label      String
-  href       String
-  restricted String? // "LEADER" | "ADMIN" if used
-}
-
-model Enrollment {
-  id        String   @id @default(cuid())
-  userId    String
-  courseId  String
-  status    String   @default("ACTIVE") // ACTIVE | COMPLETED | DROPPED
-  createdAt DateTime @default(now())
-
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, courseId])
-}
-
-/**
- * ----------------- Progress (per CourseSession) -----------------
- */
-model Progress {
-  id          String   @id @default(cuid())
-  userId      String
-  sessionId   String
-  completedAt DateTime @default(now())
-
-  user    User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  session CourseSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, sessionId])
-}
-
 model AccessRequest {
-  id       String @id @default(cuid())
-  courseId String
-  course   Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
-
+  id        String   @id @default(uuid()) @db.Uuid
+  courseId  String   @db.Uuid
   name      String
   email     String
   message   String?
-  status    String   @default("PENDING") // PENDING | APPROVED | REJECTED (use strings)
+  status    String   @default("PENDING")
   createdAt DateTime @default(now())
 
-  @@index([courseId])
+  course    Course   @relation(fields: [courseId], references: [id])
 }
