@@ -5,7 +5,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL") // ← Supabase Postgres URL
+  url      = env("DATABASE_URL") // Supabase Postgres URL
 }
 
 enum Role {
@@ -42,7 +42,7 @@ model User {
   // App relations
   progresses     Progress[]
   enrollments    Enrollment[]
-  accessRequests AccessRequest[]
+  accessRequests AccessRequest[]   // ← now has an opposite on AccessRequest
 
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
@@ -87,20 +87,20 @@ model VerificationToken {
 /* ---------------------- App models ---------------------- */
 
 model Course {
-  id            String           @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
-  title         String
-  slug          String           @unique
-  summary       String?
-  thumbnail     String?
-  isPublished   Boolean          @default(false)
+  id             String           @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
+  title          String
+  slug           String           @unique
+  summary        String?
+  thumbnail      String?
+  isPublished    Boolean          @default(false)
 
   // Relations
-  sessions      CourseSession[]
-  enrollments   Enrollment[]
+  sessions       CourseSession[]
+  enrollments    Enrollment[]
   accessRequests AccessRequest[]
 
-  createdAt     DateTime         @default(now())
-  updatedAt     DateTime         @updatedAt
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
 }
 
 model CourseSession {
@@ -152,6 +152,8 @@ model Progress {
 model AccessRequest {
   id        String               @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
   courseId  String               @db.Uuid
+  // Optional: request can be tied to a user if they already exist; otherwise null
+  userId    String?              @db.Uuid
   name      String
   email     String
   message   String?
@@ -159,6 +161,9 @@ model AccessRequest {
   createdAt DateTime             @default(now())
 
   course    Course               @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  user      User?                @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([email])
+  @@index([courseId])
+  @@index([userId])
 }
